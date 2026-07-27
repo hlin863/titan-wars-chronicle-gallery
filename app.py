@@ -13,7 +13,9 @@ from dataclasses import asdict, dataclass
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from pathlib import Path
 from typing import Iterable
+from urllib.error import HTTPError, URLError
 from urllib.parse import parse_qs, unquote, urlparse
+from urllib.request import Request, urlopen
 
 from docx import Document
 from docx.document import Document as _Document
@@ -21,26 +23,15 @@ from docx.oxml.ns import qn
 from docx.table import Table
 from docx.text.paragraph import Paragraph
 
-from urllib.error import HTTPError, URLError
-from urllib.request import Request, urlopen
-
-OLLAMA_BASE_URL = os.environ.get(
-    "OLLAMA_BASE_URL",
-    "http://127.0.0.1:11434",
-).rstrip("/")
-
-OLLAMA_DEFAULT_MODEL = os.environ.get(
-    "OLLAMA_MODEL",
-    "llama3.2:latest",
-)
-
-MAX_SELECTION_LENGTH = 16_000
-MAX_DIRECTION_LENGTH = 3_000
-
 BASE_DIR = Path(__file__).resolve().parent
 DEFAULT_DOCX = Path(os.environ.get("TITAN_WARS_DOCX", "files/Manuscript.docx"))
 CACHE_ROOT = BASE_DIR / "instance" / "gallery_cache"
 YEAR_RE = re.compile(r"(?<!\d)(17\d{2}|18\d{2}|19\d{2}|20\d{2})(?!\d)")
+
+OLLAMA_BASE_URL = os.environ.get("OLLAMA_BASE_URL", "http://127.0.0.1:11434").rstrip("/")
+OLLAMA_DEFAULT_MODEL = os.environ.get("OLLAMA_MODEL", "llama3.2:latest")
+MAX_SELECTION_LENGTH = 16_000
+MAX_DIRECTION_LENGTH = 3_000
 
 
 @dataclass
@@ -54,6 +45,7 @@ class GalleryImage:
     document_order: int
     alt_text: str
 
+
 @dataclass
 class ManuscriptChapter:
     id: str
@@ -64,9 +56,28 @@ class ManuscriptChapter:
     paragraphs: list[str]
     document_order: int
 
-    @property
-    def text(self) -> str:
-        return "\n\n".join(self.paragraphs)
+
+PROMPT_WRITER_SYSTEM = """
+You are the visual-development prompt writer for Titan Wars, a historical
+alternate-history and Victorian gothic novel.
+
+Transform the selected manuscript passage into one precise, production-ready
+image-generation prompt.
+
+Rules:
+1. Use only facts supported by the passage, chapter metadata, and user continuity notes.
+2. Do not invent relationships, motives, injuries, ages, costumes, locations,
+   supernatural forms, or plot events.
+3. Preserve named characters and distinguish narrators, memories, portraits,
+   dreams, and background figures.
+4. Preserve historical year, setting, age, body type, clothing, ethnicity,
+   emotional condition, and established continuity.
+5. Choose one visually coherent moment rather than combining several scenes.
+6. Include subject, appearance, posture/action, clothing, setting, composition,
+   lighting, emotional tone, restrained background detail, and negative constraints.
+7. Do not explain your reasoning or mention the model.
+8. Return only the final image prompt.
+""".strip()
 
 
 def iter_blocks(parent: _Document) -> Iterable[Paragraph | Table]:
@@ -203,12 +214,12 @@ def extract_gallery(docx_path: Path, digest: str | None = None) -> tuple[Path, l
     )
     return media_dir, images
 
+
 def extract_chapters(docx_path: Path) -> list[ManuscriptChapter]:
     if not docx_path.exists():
         raise FileNotFoundError(f"Manuscript not found: {docx_path}")
 
     document = Document(docx_path)
-
     chapters: list[ManuscriptChapter] = []
     current_part = "The 1850s Manuscript"
     current_title: str | None = None
@@ -220,12 +231,9 @@ def extract_chapters(docx_path: Path) -> list[ManuscriptChapter]:
 
     def finish_chapter() -> None:
         nonlocal document_order
-
         if not current_title:
             return
-
         document_order += 1
-
         chapters.append(
             ManuscriptChapter(
                 id=f"chapter-{document_order}-{safe_slug(current_title)}",
@@ -241,95 +249,61 @@ def extract_chapters(docx_path: Path) -> list[ManuscriptChapter]:
     for block in iter_blocks(document):
         if not isinstance(block, Paragraph):
             continue
-
         text = compact_text(block.text)
         style = (block.style.name or "").lower()
-
         if style.startswith("heading 1") and text:
             current_part = text
             continue
-
         if style.startswith("heading 2") and text:
             finish_chapter()
-
             current_title = text
             current_year = 0
             current_metadata = []
             current_paragraphs = []
             lines_after_heading = 0
             continue
-
         if not current_title or not text:
             continue
-
         lines_after_heading += 1
-
         years = YEAR_RE.findall(text)
-
-        # Preserve short lines directly below headings as date/location metadata.
         if lines_after_heading <= 5 and len(text) <= 160:
             current_metadata.append(text)
-
             if years:
                 current_year = int(years[-1])
-
         current_paragraphs.append(text)
 
     finish_chapter()
-
     return chapters
 
-def ollama_request(
-    endpoint: str,
-    payload: dict | None = None,
-    timeout: int = 180,
-) -> dict:
-    url = f"{OLLAMA_BASE_URL}{endpoint}"
 
+def ollama_request(endpoint: str, payload: dict | None = None, timeout: int = 180) -> dict:
+    url = f"{OLLAMA_BASE_URL}{endpoint}"
     body = None
     method = "GET"
-
     if payload is not None:
         body = json.dumps(payload).encode("utf-8")
         method = "POST"
-
-    request = Request(
-        url,
-        data=body,
-        method=method,
-        headers={"Content-Type": "application/json"},
-    )
-
+    request = Request(url, data=body, method=method, headers={"Content-Type": "application/json"})
     try:
         with urlopen(request, timeout=timeout) as response:
             return json.loads(response.read().decode("utf-8"))
-
     except HTTPError as exc:
         detail = exc.read().decode("utf-8", errors="replace")
-        raise RuntimeError(
-            f"Ollama returned HTTP {exc.code}: {detail}"
-        ) from exc
-
+        raise RuntimeError(f"Ollama returned HTTP {exc.code}: {detail}") from exc
     except URLError as exc:
         raise RuntimeError(
-            "Cannot connect to Ollama. Start Ollama and confirm that "
-            f"{OLLAMA_BASE_URL} is available."
+            f"Cannot connect to Ollama at {OLLAMA_BASE_URL}. Start Ollama and try again."
         ) from exc
 
 
 def list_ollama_models() -> list[dict]:
     result = ollama_request("/api/tags")
-
     models = []
-
     for item in result.get("models", []):
         name = item.get("name") or item.get("model")
-
         if not name:
             continue
-
         details = item.get("details") or {}
-
         models.append(
             {
                 "name": name,
@@ -339,44 +313,8 @@ def list_ollama_models() -> list[dict]:
                 "size": item.get("size", 0),
             }
         )
-
     return models
 
-PROMPT_WRITER_SYSTEM = """
-You are the visual-development prompt writer for Titan Wars, a historical
-alternate-history and Victorian gothic novel.
-
-Your task is to transform a selected manuscript passage into one precise,
-production-ready image-generation prompt.
-
-Rules:
-
-1. Use only facts supported by the selected passage, chapter metadata, and
-   user continuity instructions.
-2. Do not invent relationships, motives, injuries, ages, costumes, locations,
-   supernatural forms, or plot events.
-3. Preserve named characters and distinguish them from narrators, remembered
-   people, portraits, dreams, and background figures.
-4. Preserve the historical year, setting, body type, age, clothing, ethnicity,
-   mood, and physical continuity stated in the source.
-5. Choose one visually coherent moment. Do not illustrate several separate
-   moments at once.
-6. Separate directly supported facts from optional visual interpretation.
-7. Include:
-   - main subject
-   - appearance and continuity
-   - action and posture
-   - clothing
-   - setting
-   - composition
-   - lighting
-   - emotional tone
-   - restrained background details
-   - negative constraints
-8. Do not explain your reasoning.
-9. Do not mention the language model.
-10. Return only the final image prompt.
-""".strip()
 
 def generate_prompt_with_ollama(
     *,
@@ -390,17 +328,10 @@ def generate_prompt_with_ollama(
     style_direction: str,
 ) -> dict:
     selected_text = selected_text.strip()
-
     if len(selected_text) < 20:
         raise ValueError("Select at least 20 characters from the chapter.")
-
     if len(selected_text) > MAX_SELECTION_LENGTH:
-        raise ValueError(
-            f"Selection exceeds the {MAX_SELECTION_LENGTH:,}-character limit."
-        )
-
-    continuity_notes = continuity_notes.strip()[:MAX_DIRECTION_LENGTH]
-    style_direction = style_direction.strip()[:MAX_DIRECTION_LENGTH]
+        raise ValueError(f"Selection exceeds the {MAX_SELECTION_LENGTH:,}-character limit.")
 
     context = {
         "chapter": chapter_title,
@@ -408,50 +339,29 @@ def generate_prompt_with_ollama(
         "year": year or None,
         "chapter_metadata": metadata_lines,
         "selected_passage": selected_text,
-        "continuity_instructions": continuity_notes,
-        "style_direction": style_direction,
+        "continuity_instructions": continuity_notes.strip()[:MAX_DIRECTION_LENGTH],
+        "style_direction": style_direction.strip()[:MAX_DIRECTION_LENGTH],
     }
-
     response = ollama_request(
         "/api/chat",
         {
             "model": model,
             "stream": False,
             "messages": [
-                {
-                    "role": "system",
-                    "content": PROMPT_WRITER_SYSTEM,
-                },
+                {"role": "system", "content": PROMPT_WRITER_SYSTEM},
                 {
                     "role": "user",
-                    "content": (
-                        "Create an image prompt from this source material:\n\n"
-                        + json.dumps(
-                            context,
-                            ensure_ascii=False,
-                            indent=2,
-                        )
-                    ),
+                    "content": "Create an image prompt from this source material:\n\n"
+                    + json.dumps(context, ensure_ascii=False, indent=2),
                 },
             ],
-            "options": {
-                "temperature": 0.35,
-                "top_p": 0.9,
-                "num_predict": 1400,
-            },
+            "options": {"temperature": 0.35, "top_p": 0.9, "num_predict": 1400},
             "keep_alive": "10m",
         },
     )
-
-    prompt = (
-        response.get("message", {})
-        .get("content", "")
-        .strip()
-    )
-
+    prompt = response.get("message", {}).get("content", "").strip()
     if not prompt:
         raise RuntimeError("Ollama returned an empty prompt.")
-
     return {
         "prompt": prompt,
         "model": response.get("model", model),
@@ -459,6 +369,7 @@ def generate_prompt_with_ollama(
         "output_tokens": response.get("eval_count"),
         "duration_ns": response.get("total_duration"),
     }
+
 
 def group_chapters(images: list[GalleryImage]):
     groups, index = [], {}
@@ -495,12 +406,8 @@ def render_page(source: Path, images: list[GalleryImage], version: str) -> bytes
             frames.append(
                 f'''<button class="image-frame" type="button" data-full="{url}" data-alt="{e(image.alt_text)}" data-title="{e(group['chapter'])}" aria-label="Open illustration from {e(group['chapter'])}"><img src="{url}" alt="{e(image.alt_text)}" loading="lazy"><span class="zoom-label">View image</span></button>'''
             )
-        search_text = (
-            f"{group['chapter']} {group['part']} {group['context']} {group['year']}".lower()
-        )
-        context = (
-            f'<div class="context">{e(group["context"])}</div>' if group["context"] else ""
-        )
+        search_text = f"{group['chapter']} {group['part']} {group['context']} {group['year']}".lower()
+        context = f'<div class="context">{e(group["context"])}</div>' if group["context"] else ""
         chapters.append(
             f'''<article class="chapter" data-year="{group['year']}" data-search="{e(search_text)}"><div class="timeline-marker"><span>{group['year'] or '—'}</span></div><div class="chapter-card"><div class="chapter-heading"><p>{e(group['part'])}</p><h2>{e(group['chapter'])}</h2>{context}</div><div class="image-grid count-{len(frames)}">{''.join(frames)}</div></div></article>'''
         )
@@ -527,34 +434,32 @@ class GalleryServer:
         self.version = ""
         self.media_dir = CACHE_ROOT
         self.images: list[GalleryImage] = []
+        self.chapters: list[ManuscriptChapter] = []
         self.index_html = b""
         self.refresh(force=True)
 
     def refresh(self, force: bool = False) -> bool:
-        """Re-extract and re-render when the DOCX has changed."""
         with self.lock:
             current_stat = file_stat_signature(self.source)
             if not force and current_stat == self.stat_signature:
                 return False
-
-            # Word/OneDrive can briefly expose the file while it is still being saved.
-            # Hashing also ensures that replaced images produce a new gallery version.
             digest = file_digest(self.source)
             if not force and digest == self.version:
                 self.stat_signature = current_stat
                 return False
 
             media_dir, images = extract_gallery(self.source, digest)
+            chapters = extract_chapters(self.source)
             index_html = render_page(self.source, images, digest[:16])
-
             self.media_dir = media_dir
             self.images = images
+            self.chapters = chapters
             self.index_html = index_html
             self.version = digest
             self.stat_signature = current_stat
             print(
-                f"Gallery refreshed: {len(images)} images from {self.source.name} "
-                f"(version {digest[:12]})"
+                f"Gallery refreshed: {len(images)} images, {len(chapters)} chapters "
+                f"from {self.source.name} (version {digest[:12]})"
             )
             return True
 
@@ -562,7 +467,6 @@ class GalleryServer:
         try:
             return self.refresh(force=False)
         except (OSError, PermissionError, ValueError, json.JSONDecodeError) as exc:
-            # Keep serving the last valid gallery while Word is in the middle of saving.
             print(f"Manuscript refresh deferred: {exc}")
             return False
 
@@ -570,65 +474,40 @@ class GalleryServer:
         server_state = self
 
         class Handler(BaseHTTPRequestHandler):
-            def do_GET(self):
-                parsed = urlparse(self.path)
-                path = unquote(parsed.path)
-                query = parse_qs(parsed.query)
-
-                if path in {"/", "/api/version", "/health"}:
-                    server_state.refresh_if_changed()
-
-                if path == "/":
-                    with server_state.lock:
-                        self.send_content(
-                            server_state.index_html,
-                            "text/html; charset=utf-8",
-                            cache_control="no-store",
-                        )
-                elif path == "/api/version":
-                    if query.get("force") == ["1"]:
-                        server_state.refresh(force=True)
-                    with server_state.lock:
-                        payload = json.dumps(
-                            {
-                                "version": server_state.version[:16],
-                                "images": len(server_state.images),
-                                "chapters": len(group_chapters(server_state.images)),
-                            }
-                        ).encode()
-                    self.send_content(payload, "application/json", cache_control="no-store")
-                elif path == "/health":
-                    with server_state.lock:
-                        payload = json.dumps(
-                            {
-                                "status": "ok",
-                                "version": server_state.version[:16],
-                                "images": len(server_state.images),
-                                "chapters": len(group_chapters(server_state.images)),
-                            }
-                        ).encode()
-                    self.send_content(payload, "application/json", cache_control="no-store")
-                elif path.startswith("/media/"):
-                    with server_state.lock:
-                        media_dir = server_state.media_dir
-                    self.send_file(media_dir, path[len("/media/") :], cache_control="public, max-age=31536000, immutable")
-                elif path.startswith("/static/"):
-                    self.send_file(BASE_DIR / "static", path[len("/static/") :], cache_control="no-cache")
-                else:
-                    self.send_error(404)
-
-            def send_content(
-                self,
-                payload: bytes,
-                content_type: str,
-                cache_control: str = "no-cache",
-            ):
+            def send_content(self, payload: bytes, content_type: str, cache_control: str = "no-cache"):
                 self.send_response(200)
                 self.send_header("Content-Type", content_type)
                 self.send_header("Cache-Control", cache_control)
                 self.send_header("Content-Length", str(len(payload)))
                 self.end_headers()
                 self.wfile.write(payload)
+
+            def send_json(self, payload: dict | list, status: int = 200):
+                encoded = json.dumps(payload, ensure_ascii=False).encode("utf-8")
+                self.send_response(status)
+                self.send_header("Content-Type", "application/json; charset=utf-8")
+                self.send_header("Cache-Control", "no-store")
+                self.send_header("Content-Length", str(len(encoded)))
+                self.end_headers()
+                self.wfile.write(encoded)
+
+            def read_json(self) -> dict:
+                try:
+                    length = int(self.headers.get("Content-Length", "0"))
+                except ValueError as exc:
+                    raise ValueError("Invalid request length.") from exc
+                if length <= 0:
+                    raise ValueError("The request body is empty.")
+                if length > 100_000:
+                    raise ValueError("The request body is too large.")
+                raw = self.rfile.read(length)
+                try:
+                    payload = json.loads(raw.decode("utf-8"))
+                except (UnicodeDecodeError, json.JSONDecodeError) as exc:
+                    raise ValueError("Invalid JSON request.") from exc
+                if not isinstance(payload, dict):
+                    raise ValueError("The request body must be a JSON object.")
+                return payload
 
             def send_file(self, root: Path, relative: str, cache_control: str = "no-cache"):
                 target = (root / relative).resolve()
@@ -640,9 +519,103 @@ class GalleryServer:
                 if not target.is_file():
                     self.send_error(404)
                     return
-                payload = target.read_bytes()
                 mime = mimetypes.guess_type(target.name)[0] or "application/octet-stream"
-                self.send_content(payload, mime, cache_control=cache_control)
+                self.send_content(target.read_bytes(), mime, cache_control=cache_control)
+
+            def do_GET(self):
+                parsed = urlparse(self.path)
+                path = unquote(parsed.path)
+                query = parse_qs(parsed.query)
+
+                if path in {"/", "/prompt-studio", "/api/version", "/api/chapters", "/health"}:
+                    server_state.refresh_if_changed()
+
+                if path == "/":
+                    with server_state.lock:
+                        self.send_content(server_state.index_html, "text/html; charset=utf-8", "no-store")
+                elif path == "/prompt-studio":
+                    self.send_file(BASE_DIR / "templates", "prompt_studio.html", "no-store")
+                elif path == "/api/version":
+                    if query.get("force") == ["1"]:
+                        server_state.refresh(force=True)
+                    with server_state.lock:
+                        self.send_json(
+                            {
+                                "version": server_state.version[:16],
+                                "images": len(server_state.images),
+                                "chapters": len(server_state.chapters),
+                            }
+                        )
+                elif path == "/api/chapters":
+                    with server_state.lock:
+                        chapters = [asdict(chapter) for chapter in server_state.chapters]
+                        version = server_state.version[:16]
+                    self.send_json({"ok": True, "version": version, "chapters": chapters})
+                elif path == "/api/ollama/models":
+                    try:
+                        self.send_json(
+                            {
+                                "ok": True,
+                                "default_model": OLLAMA_DEFAULT_MODEL,
+                                "models": list_ollama_models(),
+                            }
+                        )
+                    except RuntimeError as exc:
+                        self.send_json({"ok": False, "error": str(exc), "models": []}, 503)
+                elif path == "/health":
+                    with server_state.lock:
+                        self.send_json(
+                            {
+                                "status": "ok",
+                                "version": server_state.version[:16],
+                                "images": len(server_state.images),
+                                "chapters": len(server_state.chapters),
+                            }
+                        )
+                elif path.startswith("/media/"):
+                    with server_state.lock:
+                        media_dir = server_state.media_dir
+                    self.send_file(media_dir, path[len("/media/"):], "public, max-age=31536000, immutable")
+                elif path.startswith("/static/"):
+                    self.send_file(BASE_DIR / "static", path[len("/static/"):], "no-cache")
+                else:
+                    self.send_error(404)
+
+            def do_POST(self):
+                path = unquote(urlparse(self.path).path)
+                try:
+                    if path != "/api/ollama/write-prompt":
+                        self.send_json({"ok": False, "error": "Unknown API route."}, 404)
+                        return
+                    payload = self.read_json()
+                    try:
+                        year = int(payload.get("year") or 0)
+                    except (TypeError, ValueError):
+                        year = 0
+                    metadata_lines = payload.get("metadata_lines") or []
+                    if not isinstance(metadata_lines, list):
+                        metadata_lines = []
+                    result = generate_prompt_with_ollama(
+                        model=str(payload.get("model") or OLLAMA_DEFAULT_MODEL),
+                        chapter_title=str(payload.get("chapter_title") or ""),
+                        part=str(payload.get("part") or ""),
+                        year=year,
+                        metadata_lines=[str(item) for item in metadata_lines if isinstance(item, str)],
+                        selected_text=str(payload.get("selected_text") or ""),
+                        continuity_notes=str(payload.get("continuity_notes") or ""),
+                        style_direction=str(payload.get("style_direction") or ""),
+                    )
+                    self.send_json({"ok": True, **result})
+                except ValueError as exc:
+                    self.send_json({"ok": False, "error": str(exc)}, 400)
+                except RuntimeError as exc:
+                    self.send_json({"ok": False, "error": str(exc)}, 503)
+                except Exception as exc:
+                    print(f"Prompt Studio error: {exc}")
+                    self.send_json(
+                        {"ok": False, "error": "Prompt generation failed. Check the server terminal."},
+                        500,
+                    )
 
             def log_message(self, fmt, *args):
                 print(f"[{self.log_date_time_string()}] {fmt % args}")
@@ -652,7 +625,7 @@ class GalleryServer:
 
 def main():
     parser = argparse.ArgumentParser(
-        description="Display manuscript illustrations as a chronological web gallery."
+        description="Display manuscript illustrations and provide a local Ollama prompt studio."
     )
     parser.add_argument("--docx", type=Path, default=DEFAULT_DOCX, help="Path to the manuscript DOCX")
     parser.add_argument("--host", default="127.0.0.1")
@@ -661,6 +634,7 @@ def main():
     gallery = GalleryServer(args.docx)
     server = ThreadingHTTPServer((args.host, args.port), gallery.handler_class())
     print(f"Titan Wars gallery: http://{args.host}:{args.port}")
+    print(f"Prompt Studio: http://{args.host}:{args.port}/prompt-studio")
     print(f"Watching manuscript for changes: {gallery.source}")
     try:
         server.serve_forever()
