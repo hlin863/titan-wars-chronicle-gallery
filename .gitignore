@@ -53,3 +53,10 @@ Desktop.ini
 
 # macOS files
 .DS_Store
+
+# OpenAI credentials
+.env
+.env.*
+
+# Generated experimental artwork
+instance/generated_images/
