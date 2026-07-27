@@ -33,6 +33,32 @@ const nextButton = document.querySelector('#lightbox-next');
 const frames = [...document.querySelectorAll('.image-frame')];
 let currentImageIndex = 0;
 let touchStartX = null;
+let touchStartY = null;
+
+function isLightboxOpen() {
+  return dialog.hasAttribute('open');
+}
+
+function openLightbox() {
+  // Older browsers expose <dialog> without implementing the modal methods.
+  // Keeping an attribute-based fallback prevents an image click from throwing
+  // and leaving the viewer blank.
+  if (typeof dialog.showModal === 'function') {
+    if (!isLightboxOpen()) dialog.showModal();
+  } else {
+    dialog.setAttribute('open', '');
+    dialog.setAttribute('aria-modal', 'true');
+  }
+}
+
+function closeLightbox() {
+  if (typeof dialog.close === 'function') {
+    if (isLightboxOpen()) dialog.close();
+  } else {
+    dialog.removeAttribute('open');
+    dialog.removeAttribute('aria-modal');
+  }
+}
 
 function preloadImage(index) {
   if (index < 0 || index >= frames.length) return;
@@ -50,6 +76,8 @@ function showImage(index) {
   dialogImage.alt = frame.dataset.alt;
   caption.textContent = frame.dataset.title;
   position.textContent = `${currentImageIndex + 1} of ${frames.length}`;
+  previousButton.disabled = frames.length < 2;
+  nextButton.disabled = frames.length < 2;
 
   preloadImage((currentImageIndex + 1) % frames.length);
   preloadImage((currentImageIndex - 1 + frames.length) % frames.length);
@@ -65,36 +93,45 @@ function showNextImage() {
 
 frames.forEach((frame, index) => frame.addEventListener('click', () => {
   showImage(index);
-  dialog.showModal();
+  openLightbox();
 }));
 
 previousButton.addEventListener('click', showPreviousImage);
 nextButton.addEventListener('click', showNextImage);
-dialog.querySelector('.close').addEventListener('click', () => dialog.close());
+dialog.querySelector('.close').addEventListener('click', closeLightbox);
 
 dialog.addEventListener('click', event => {
-  if (event.target === dialog) dialog.close();
+  if (event.target === dialog) closeLightbox();
 });
 
 dialog.addEventListener('touchstart', event => {
   touchStartX = event.changedTouches[0].clientX;
+  touchStartY = event.changedTouches[0].clientY;
 }, { passive: true });
 
 dialog.addEventListener('touchend', event => {
-  if (touchStartX === null) return;
+  if (touchStartX === null || touchStartY === null) return;
 
-  const distance = event.changedTouches[0].clientX - touchStartX;
+  const horizontalDistance = event.changedTouches[0].clientX - touchStartX;
+  const verticalDistance = event.changedTouches[0].clientY - touchStartY;
   touchStartX = null;
+  touchStartY = null;
 
-  if (Math.abs(distance) < 50) return;
-  if (distance > 0) showPreviousImage();
+  if (Math.abs(horizontalDistance) < 50 || Math.abs(horizontalDistance) <= Math.abs(verticalDistance)) return;
+  if (horizontalDistance > 0) showPreviousImage();
   else showNextImage();
 }, { passive: true });
 
 document.addEventListener('keydown', event => {
-  if (!dialog.open) return;
+  if (!isLightboxOpen()) return;
 
-  if (event.key === 'Escape') dialog.close();
-  if (event.key === 'ArrowLeft') showPreviousImage();
-  if (event.key === 'ArrowRight') showNextImage();
+  if (event.key === 'Escape') closeLightbox();
+  if (event.key === 'ArrowLeft') {
+    event.preventDefault();
+    showPreviousImage();
+  }
+  if (event.key === 'ArrowRight') {
+    event.preventDefault();
+    showNextImage();
+  }
 });
