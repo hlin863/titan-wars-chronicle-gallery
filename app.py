@@ -21,6 +21,22 @@ from docx.oxml.ns import qn
 from docx.table import Table
 from docx.text.paragraph import Paragraph
 
+from urllib.error import HTTPError, URLError
+from urllib.request import Request, urlopen
+
+OLLAMA_BASE_URL = os.environ.get(
+    "OLLAMA_BASE_URL",
+    "http://127.0.0.1:11434",
+).rstrip("/")
+
+OLLAMA_DEFAULT_MODEL = os.environ.get(
+    "OLLAMA_MODEL",
+    "llama3.2:latest",
+)
+
+MAX_SELECTION_LENGTH = 16_000
+MAX_DIRECTION_LENGTH = 3_000
+
 BASE_DIR = Path(__file__).resolve().parent
 DEFAULT_DOCX = Path(os.environ.get("TITAN_WARS_DOCX", "files/Manuscript.docx"))
 CACHE_ROOT = BASE_DIR / "instance" / "gallery_cache"
@@ -37,6 +53,20 @@ class GalleryImage:
     context: str
     document_order: int
     alt_text: str
+
+@dataclass
+class ManuscriptChapter:
+    id: str
+    title: str
+    part: str
+    year: int
+    metadata_lines: list[str]
+    paragraphs: list[str]
+    document_order: int
+
+    @property
+    def text(self) -> str:
+        return "\n\n".join(self.paragraphs)
 
 
 def iter_blocks(parent: _Document) -> Iterable[Paragraph | Table]:
@@ -173,6 +203,262 @@ def extract_gallery(docx_path: Path, digest: str | None = None) -> tuple[Path, l
     )
     return media_dir, images
 
+def extract_chapters(docx_path: Path) -> list[ManuscriptChapter]:
+    if not docx_path.exists():
+        raise FileNotFoundError(f"Manuscript not found: {docx_path}")
+
+    document = Document(docx_path)
+
+    chapters: list[ManuscriptChapter] = []
+    current_part = "The 1850s Manuscript"
+    current_title: str | None = None
+    current_year = 0
+    current_metadata: list[str] = []
+    current_paragraphs: list[str] = []
+    document_order = 0
+    lines_after_heading = 0
+
+    def finish_chapter() -> None:
+        nonlocal document_order
+
+        if not current_title:
+            return
+
+        document_order += 1
+
+        chapters.append(
+            ManuscriptChapter(
+                id=f"chapter-{document_order}-{safe_slug(current_title)}",
+                title=current_title,
+                part=current_part,
+                year=current_year,
+                metadata_lines=current_metadata.copy(),
+                paragraphs=current_paragraphs.copy(),
+                document_order=document_order,
+            )
+        )
+
+    for block in iter_blocks(document):
+        if not isinstance(block, Paragraph):
+            continue
+
+        text = compact_text(block.text)
+        style = (block.style.name or "").lower()
+
+        if style.startswith("heading 1") and text:
+            current_part = text
+            continue
+
+        if style.startswith("heading 2") and text:
+            finish_chapter()
+
+            current_title = text
+            current_year = 0
+            current_metadata = []
+            current_paragraphs = []
+            lines_after_heading = 0
+            continue
+
+        if not current_title or not text:
+            continue
+
+        lines_after_heading += 1
+
+        years = YEAR_RE.findall(text)
+
+        # Preserve short lines directly below headings as date/location metadata.
+        if lines_after_heading <= 5 and len(text) <= 160:
+            current_metadata.append(text)
+
+            if years:
+                current_year = int(years[-1])
+
+        current_paragraphs.append(text)
+
+    finish_chapter()
+
+    return chapters
+
+def ollama_request(
+    endpoint: str,
+    payload: dict | None = None,
+    timeout: int = 180,
+) -> dict:
+    url = f"{OLLAMA_BASE_URL}{endpoint}"
+
+    body = None
+    method = "GET"
+
+    if payload is not None:
+        body = json.dumps(payload).encode("utf-8")
+        method = "POST"
+
+    request = Request(
+        url,
+        data=body,
+        method=method,
+        headers={"Content-Type": "application/json"},
+    )
+
+    try:
+        with urlopen(request, timeout=timeout) as response:
+            return json.loads(response.read().decode("utf-8"))
+
+    except HTTPError as exc:
+        detail = exc.read().decode("utf-8", errors="replace")
+        raise RuntimeError(
+            f"Ollama returned HTTP {exc.code}: {detail}"
+        ) from exc
+
+    except URLError as exc:
+        raise RuntimeError(
+            "Cannot connect to Ollama. Start Ollama and confirm that "
+            f"{OLLAMA_BASE_URL} is available."
+        ) from exc
+
+
+def list_ollama_models() -> list[dict]:
+    result = ollama_request("/api/tags")
+
+    models = []
+
+    for item in result.get("models", []):
+        name = item.get("name") or item.get("model")
+
+        if not name:
+            continue
+
+        details = item.get("details") or {}
+
+        models.append(
+            {
+                "name": name,
+                "parameter_size": details.get("parameter_size", ""),
+                "quantization": details.get("quantization_level", ""),
+                "family": details.get("family", ""),
+                "size": item.get("size", 0),
+            }
+        )
+
+    return models
+
+PROMPT_WRITER_SYSTEM = """
+You are the visual-development prompt writer for Titan Wars, a historical
+alternate-history and Victorian gothic novel.
+
+Your task is to transform a selected manuscript passage into one precise,
+production-ready image-generation prompt.
+
+Rules:
+
+1. Use only facts supported by the selected passage, chapter metadata, and
+   user continuity instructions.
+2. Do not invent relationships, motives, injuries, ages, costumes, locations,
+   supernatural forms, or plot events.
+3. Preserve named characters and distinguish them from narrators, remembered
+   people, portraits, dreams, and background figures.
+4. Preserve the historical year, setting, body type, age, clothing, ethnicity,
+   mood, and physical continuity stated in the source.
+5. Choose one visually coherent moment. Do not illustrate several separate
+   moments at once.
+6. Separate directly supported facts from optional visual interpretation.
+7. Include:
+   - main subject
+   - appearance and continuity
+   - action and posture
+   - clothing
+   - setting
+   - composition
+   - lighting
+   - emotional tone
+   - restrained background details
+   - negative constraints
+8. Do not explain your reasoning.
+9. Do not mention the language model.
+10. Return only the final image prompt.
+""".strip()
+
+def generate_prompt_with_ollama(
+    *,
+    model: str,
+    chapter_title: str,
+    part: str,
+    year: int,
+    metadata_lines: list[str],
+    selected_text: str,
+    continuity_notes: str,
+    style_direction: str,
+) -> dict:
+    selected_text = selected_text.strip()
+
+    if len(selected_text) < 20:
+        raise ValueError("Select at least 20 characters from the chapter.")
+
+    if len(selected_text) > MAX_SELECTION_LENGTH:
+        raise ValueError(
+            f"Selection exceeds the {MAX_SELECTION_LENGTH:,}-character limit."
+        )
+
+    continuity_notes = continuity_notes.strip()[:MAX_DIRECTION_LENGTH]
+    style_direction = style_direction.strip()[:MAX_DIRECTION_LENGTH]
+
+    context = {
+        "chapter": chapter_title,
+        "part": part,
+        "year": year or None,
+        "chapter_metadata": metadata_lines,
+        "selected_passage": selected_text,
+        "continuity_instructions": continuity_notes,
+        "style_direction": style_direction,
+    }
+
+    response = ollama_request(
+        "/api/chat",
+        {
+            "model": model,
+            "stream": False,
+            "messages": [
+                {
+                    "role": "system",
+                    "content": PROMPT_WRITER_SYSTEM,
+                },
+                {
+                    "role": "user",
+                    "content": (
+                        "Create an image prompt from this source material:\n\n"
+                        + json.dumps(
+                            context,
+                            ensure_ascii=False,
+                            indent=2,
+                        )
+                    ),
+                },
+            ],
+            "options": {
+                "temperature": 0.35,
+                "top_p": 0.9,
+                "num_predict": 1400,
+            },
+            "keep_alive": "10m",
+        },
+    )
+
+    prompt = (
+        response.get("message", {})
+        .get("content", "")
+        .strip()
+    )
+
+    if not prompt:
+        raise RuntimeError("Ollama returned an empty prompt.")
+
+    return {
+        "prompt": prompt,
+        "model": response.get("model", model),
+        "prompt_tokens": response.get("prompt_eval_count"),
+        "output_tokens": response.get("eval_count"),
+        "duration_ns": response.get("total_duration"),
+    }
 
 def group_chapters(images: list[GalleryImage]):
     groups, index = [], {}
