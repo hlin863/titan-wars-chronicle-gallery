@@ -29,7 +29,7 @@ CACHE_ROOT = BASE_DIR / "instance" / "gallery_cache"
 YEAR_RE = re.compile(r"(?<!\d)(17\d{2}|18\d{2}|19\d{2}|20\d{2})(?!\d)")
 
 OLLAMA_BASE_URL = os.environ.get("OLLAMA_BASE_URL", "http://127.0.0.1:11434").rstrip("/")
-OLLAMA_DEFAULT_MODEL = os.environ.get("OLLAMA_MODEL", "llama3.2:latest")
+OLLAMA_DEFAULT_MODEL = os.environ.get("OLLAMA_MODEL", "gemma3:4b")
 MAX_SELECTION_LENGTH = 16_000
 MAX_DIRECTION_LENGTH = 3_000
 
@@ -55,6 +55,10 @@ class ManuscriptChapter:
     metadata_lines: list[str]
     paragraphs: list[str]
     document_order: int
+
+    @property
+    def text(self) -> str:
+        return "\n\n".join(self.paragraphs)
 
 
 PROMPT_WRITER_SYSTEM = """
@@ -392,7 +396,7 @@ def e(value) -> str:
     return html.escape(str(value), quote=True)
 
 
-def render_page(source: Path, images: list[GalleryImage], version: str) -> bytes:
+def render_page(source: Path, images: list[GalleryImage], version: str = "") -> bytes:
     groups = group_chapters(images)
     years = sorted({x.year for x in images if x.year})
     year_buttons = "".join(
