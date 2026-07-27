@@ -39,8 +39,6 @@ document.addEventListener('DOMContentLoaded', () => {
   const closeButton = dialog?.querySelector('.close');
   const frames = [...document.querySelectorAll('.image-frame')];
 
-  // Stop here cleanly when an older cached HTML template is paired with the
-  // newest JavaScript. This avoids null-reference errors while the page reloads.
   if (!dialog || !dialogImage || !caption || !position || !previousButton || !nextButton || !closeButton) {
     console.error('Lightbox markup is incomplete. Restart the app and hard-refresh the page (Ctrl+F5).');
     return;
@@ -146,5 +144,42 @@ document.addEventListener('DOMContentLoaded', () => {
       event.preventDefault();
       showNextImage();
     }
+  });
+
+  // Keep the gallery aligned with the currently saved DOCX. The server checks
+  // the manuscript and rebuilds its image cache; the browser reloads only when
+  // the resulting document version changes.
+  const initialVersion = document.documentElement.dataset.galleryVersion || '';
+  let currentVersion = initialVersion;
+  let versionCheckInFlight = false;
+
+  async function checkForManuscriptUpdate() {
+    if (versionCheckInFlight || document.hidden) return;
+    versionCheckInFlight = true;
+
+    try {
+      const response = await fetch('/api/version', {
+        cache: 'no-store',
+        headers: { Accept: 'application/json' }
+      });
+      if (!response.ok) return;
+
+      const data = await response.json();
+      if (data.version && currentVersion && data.version !== currentVersion) {
+        window.location.reload();
+        return;
+      }
+      currentVersion = data.version || currentVersion;
+    } catch (error) {
+      console.debug('Manuscript update check deferred.', error);
+    } finally {
+      versionCheckInFlight = false;
+    }
+  }
+
+  window.setInterval(checkForManuscriptUpdate, 3000);
+  window.addEventListener('focus', checkForManuscriptUpdate);
+  document.addEventListener('visibilitychange', () => {
+    if (!document.hidden) checkForManuscriptUpdate();
   });
 });
