@@ -1,0 +1,55 @@
+# Python virtual environments
+.venv/
+venv/
+env/
+
+# Python cache and compiled files
+__pycache__/
+*.py[cod]
+*$py.class
+
+# Python packaging
+build/
+dist/
+*.egg-info/
+.eggs/
+
+# Test and coverage files
+.pytest_cache/
+.coverage
+htmlcov/
+
+# Type-checking and lint caches
+.mypy_cache/
+.ruff_cache/
+
+# Environment variables and local configuration
+.env
+.env.*
+*.local
+
+# Extracted manuscript images and generated gallery data
+extracted_images/
+static/extracted_images/
+generated/
+output/
+cache/
+.cache/
+
+# Application runtime files
+*.log
+*.pid
+
+# Local manuscript files
+*.docx
+~$*.docx
+
+# VS Code local settings
+.vscode/
+
+# Windows files
+Thumbs.db
+Desktop.ini
+
+# macOS files
+.DS_Store
