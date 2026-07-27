@@ -77,11 +77,11 @@
             <textarea id="style-direction" rows="5"
                 placeholder="Example: cinematic Victorian gothic portrait, warm candlelight against cold moonlight."></textarea>
 
-            <button id="generate-prompt" type="button">
+            <button id="generate-prompt" class="primary-action" type="button">
                 Generate prompt with Ollama
             </button>
 
-            <div id="generation-status" aria-live="polite"></div>
+            <div id="generation-status" class="generation-status" aria-live="polite"></div>
 
             <label for="generated-prompt">Generated image prompt</label>
 
@@ -97,7 +97,7 @@
                 </button>
             </div>
 
-            <p id="generation-metrics"></p>
+            <p id="generation-metrics" class="generation-metrics"></p>
         </aside>
     </main>
 
