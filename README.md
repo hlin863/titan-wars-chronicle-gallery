@@ -7,7 +7,8 @@ A small Python web application that reads the embedded illustrations from the 18
 - Extracts images directly from the DOCX file.
 - Sorts illustrated chapters by year, then by their original document order.
 - Year filters, chapter search, responsive layout, and full-screen image viewing.
-- Caches extracted media and metadata, so later launches are fast.
+- Keeps one current extracted copy of each image under `instance/gallery_media` instead of creating revision-specific cache folders.
+- Automatically refreshes the canonical media folder when the manuscript changes.
 - Does not modify the manuscript.
 
 ## Run on Windows
@@ -34,8 +35,10 @@ python app.py --docx "/path/to/Manuscript.docx"
 
 ## Using the included project manuscript
 
-The default source in `app.py` is `/mnt/data/Manuscript(5).docx`, which is suitable for this generated workspace. On another computer, set the `TITAN_WARS_DOCX` environment variable as shown above.
+The default source in `app.py` is `files/Manuscript.docx`. You can point the application at another manuscript with `--docx` or the `TITAN_WARS_DOCX` environment variable.
 
 ## Refreshing after manuscript changes
 
-The cache key includes the manuscript file size and modification time. Saving a changed DOCX automatically creates a fresh extraction the next time the application starts. Cached files are stored under `instance/gallery_cache`.
+The server watches the manuscript file for changes. It uses the file signature and SHA-256 digest only to decide whether a refresh is needed and to version browser image URLs.
+
+When the manuscript changes, the application replaces the contents of `instance/gallery_media` in place. It does not create hash-named cache directories or persist a manifest, so old image extractions do not accumulate alongside the current gallery.
