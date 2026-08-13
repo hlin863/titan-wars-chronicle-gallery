@@ -10,6 +10,7 @@ A small Python web application that reads the embedded illustrations from the 18
 - Keeps one persistent local image folder under `instance/gallery_media` instead of creating revision-specific cache folders.
 - Synchronizes that folder incrementally when the manuscript changes: new images are added, unchanged images are left untouched, and removed manuscript images are deleted individually.
 - Uses content-derived image filenames, so moving an illustration within the manuscript does not force unrelated image files to be renamed or rewritten.
+- Includes a Prompt Studio backed by local Ollama models.
 - Does not modify the manuscript.
 
 ## Run on Windows
@@ -22,7 +23,15 @@ pip install -r requirements.txt
 python app.py --docx "C:\path\to\Manuscript.docx"
 ```
 
-Open `http://127.0.0.1:5000` in a browser.
+If the local Python process has been stopping unexpectedly, use the supervised launcher instead:
+
+```powershell
+python run_gallery.py --docx "C:\path\to\Manuscript.docx"
+```
+
+The supervised launcher starts `app.py` with Python fault diagnostics enabled, prints the child process ID and exit code, and restarts the gallery automatically after an abnormal child-process exit. Press Ctrl+C to stop the supervisor normally.
+
+Open `http://127.0.0.1:5000` in a browser. Prompt Studio is available at `http://127.0.0.1:5000/prompt-studio`.
 
 ## Run on macOS or Linux
 
@@ -33,6 +42,8 @@ source .venv/bin/activate
 pip install -r requirements.txt
 python app.py --docx "/path/to/Manuscript.docx"
 ```
+
+The supervised launcher is also available with `python3 run_gallery.py`.
 
 ## Using the included project manuscript
 
