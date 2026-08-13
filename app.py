@@ -25,7 +25,7 @@ from docx.text.paragraph import Paragraph
 
 BASE_DIR = Path(__file__).resolve().parent
 DEFAULT_DOCX = Path(os.environ.get("TITAN_WARS_DOCX", "files/Manuscript.docx"))
-CACHE_ROOT = BASE_DIR / "instance" / "gallery_cache"
+MEDIA_ROOT = BASE_DIR / "instance" / "gallery_media"
 YEAR_RE = re.compile(r"(?<!\d)(17\d{2}|18\d{2}|19\d{2}|20\d{2})(?!\d)")
 
 OLLAMA_BASE_URL = os.environ.get("OLLAMA_BASE_URL", "http://127.0.0.1:11434").rstrip("/")
@@ -137,25 +137,18 @@ def file_stat_signature(path: Path) -> tuple[int, int]:
     return stat.st_size, stat.st_mtime_ns
 
 
-def cache_key(docx_path: Path, digest: str | None = None) -> str:
-    digest = digest or file_digest(docx_path)
-    raw = f"{docx_path.resolve()}:{digest}".encode()
-    return hashlib.sha256(raw).hexdigest()[:16]
+def extract_gallery(docx_path: Path, media_dir: Path | None = None) -> tuple[Path, list[GalleryImage]]:
+    """Extract the current manuscript images into one canonical media directory.
 
-
-def extract_gallery(docx_path: Path, digest: str | None = None) -> tuple[Path, list[GalleryImage]]:
+    The directory is replaced in place on refresh. No hash-named cache directories or
+    manifests are retained, so every image has a single current extracted copy.
+    """
     if not docx_path.exists():
         raise FileNotFoundError(f"Manuscript not found: {docx_path}")
 
-    cache_dir = CACHE_ROOT / cache_key(docx_path, digest)
-    media_dir = cache_dir / "media"
-    manifest_path = cache_dir / "manifest.json"
-    if manifest_path.exists():
-        data = json.loads(manifest_path.read_text(encoding="utf-8"))
-        return media_dir, [GalleryImage(**item) for item in data]
-
-    if cache_dir.exists():
-        shutil.rmtree(cache_dir)
+    media_dir = (media_dir or MEDIA_ROOT).resolve()
+    if media_dir.exists():
+        shutil.rmtree(media_dir)
     media_dir.mkdir(parents=True, exist_ok=True)
 
     doc = Document(docx_path)
@@ -212,10 +205,6 @@ def extract_gallery(docx_path: Path, digest: str | None = None) -> tuple[Path, l
             )
 
     images.sort(key=lambda item: (item.year if item.year else 9999, item.document_order))
-    manifest_path.write_text(
-        json.dumps([asdict(x) for x in images], ensure_ascii=False, indent=2),
-        encoding="utf-8",
-    )
     return media_dir, images
 
 
@@ -436,7 +425,7 @@ class GalleryServer:
         self.lock = threading.RLock()
         self.stat_signature: tuple[int, int] | None = None
         self.version = ""
-        self.media_dir = CACHE_ROOT
+        self.media_dir = MEDIA_ROOT
         self.images: list[GalleryImage] = []
         self.chapters: list[ManuscriptChapter] = []
         self.index_html = b""
@@ -452,7 +441,7 @@ class GalleryServer:
                 self.stat_signature = current_stat
                 return False
 
-            media_dir, images = extract_gallery(self.source, digest)
+            media_dir, images = extract_gallery(self.source)
             chapters = extract_chapters(self.source)
             index_html = render_page(self.source, images, digest[:16])
             self.media_dir = media_dir
