@@ -5,7 +5,14 @@ from urllib.request import urlopen
 
 from docx import Document
 
-from app import GalleryImage, GalleryServer, ManuscriptChapter, group_chapters, render_page
+from app import (
+    GalleryImage,
+    GalleryServer,
+    ManuscriptChapter,
+    extract_gallery,
+    group_chapters,
+    render_page,
+)
 
 
 def test_gallery_renders_lightbox_and_primary_navigation():
@@ -60,6 +67,32 @@ def test_manuscript_chapter_text_joins_paragraphs():
     )
 
     assert chapter.text == "First.\n\nSecond."
+
+
+def test_extract_gallery_reuses_one_media_directory(tmp_path):
+    manuscript = tmp_path / "Manuscript.docx"
+    document = Document()
+    document.add_heading("Part I", level=1)
+    document.add_heading("The Test Chapter", level=2)
+    document.add_paragraph("London, 1856")
+    document.save(manuscript)
+
+    media_dir = tmp_path / "gallery_media"
+    first_dir, first_images = extract_gallery(manuscript, media_dir)
+    stale_file = media_dir / "stale-from-old-refresh.txt"
+    stale_file.write_text("old", encoding="utf-8")
+
+    document.add_paragraph("Updated manuscript content.")
+    document.save(manuscript)
+    second_dir, second_images = extract_gallery(manuscript, media_dir)
+
+    assert first_dir == media_dir.resolve()
+    assert second_dir == media_dir.resolve()
+    assert first_images == []
+    assert second_images == []
+    assert not stale_file.exists()
+    assert not (media_dir / "manifest.json").exists()
+    assert list(media_dir.iterdir()) == []
 
 
 def test_generate_prompt_builds_non_streaming_ollama_chat(monkeypatch):
