@@ -7,7 +7,6 @@ import json
 import mimetypes
 import os
 import re
-import shutil
 import threading
 from dataclasses import asdict, dataclass
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
@@ -27,6 +26,7 @@ BASE_DIR = Path(__file__).resolve().parent
 DEFAULT_DOCX = Path(os.environ.get("TITAN_WARS_DOCX", "files/Manuscript.docx"))
 MEDIA_ROOT = BASE_DIR / "instance" / "gallery_media"
 YEAR_RE = re.compile(r"(?<!\d)(17\d{2}|18\d{2}|19\d{2}|20\d{2})(?!\d)")
+IMAGE_SUFFIXES = {".png", ".jpg", ".jpeg", ".gif", ".webp", ".bmp", ".tif", ".tiff"}
 
 OLLAMA_BASE_URL = os.environ.get("OLLAMA_BASE_URL", "http://127.0.0.1:11434").rstrip("/")
 OLLAMA_DEFAULT_MODEL = os.environ.get("OLLAMA_MODEL", "gemma3:4b")
@@ -138,21 +138,22 @@ def file_stat_signature(path: Path) -> tuple[int, int]:
 
 
 def extract_gallery(docx_path: Path, media_dir: Path | None = None) -> tuple[Path, list[GalleryImage]]:
-    """Extract the current manuscript images into one canonical media directory.
+    """Synchronize manuscript images into one persistent local media directory.
 
-    The directory is replaced in place on refresh. No hash-named cache directories or
-    manifests are retained, so every image has a single current extracted copy.
+    Images use a content-derived filename, so moving an illustration within the
+    manuscript does not rename or rewrite it. New images are written, unchanged
+    images are left alone, and image files no longer present in the manuscript are
+    removed individually. The media directory itself is never deleted during refresh.
     """
     if not docx_path.exists():
         raise FileNotFoundError(f"Manuscript not found: {docx_path}")
 
     media_dir = (media_dir or MEDIA_ROOT).resolve()
-    if media_dir.exists():
-        shutil.rmtree(media_dir)
     media_dir.mkdir(parents=True, exist_ok=True)
 
     doc = Document(docx_path)
     images: list[GalleryImage] = []
+    expected_files: set[str] = set()
     current_part = "The 1850s Manuscript"
     current_chapter = "Opening"
     current_year: int | None = None
@@ -182,13 +183,21 @@ def extract_gallery(docx_path: Path, media_dir: Path | None = None) -> tuple[Pat
 
         for rel_id, alt in paragraph_images(block):
             image_part = doc.part.related_parts[rel_id]
+            blob = image_part.blob
             suffix = Path(str(image_part.partname)).suffix.lower() or ".png"
-            if suffix not in {".png", ".jpg", ".jpeg", ".gif", ".webp", ".bmp", ".tif", ".tiff"}:
+            if suffix not in IMAGE_SUFFIXES:
                 suffix = ".png"
+
             order += 1
             year = current_year or 0
-            file_name = f"{order:03d}-{year or 'undated'}-{safe_slug(current_chapter)}{suffix}"
-            (media_dir / file_name).write_bytes(image_part.blob)
+            content_digest = hashlib.sha256(blob).hexdigest()
+            file_name = f"{content_digest[:20]}{suffix}"
+            expected_files.add(file_name)
+
+            target = media_dir / file_name
+            if not target.exists() or file_digest(target) != content_digest:
+                target.write_bytes(blob)
+
             context_candidates = [line for line in reversed(recent_lines) if line != current_chapter]
             context = next((line for line in context_candidates if len(line) <= 130), "")
             images.append(
@@ -203,6 +212,14 @@ def extract_gallery(docx_path: Path, media_dir: Path | None = None) -> tuple[Pat
                     alt_text=alt or f"Illustration from {current_chapter}",
                 )
             )
+
+    for existing in media_dir.iterdir():
+        if (
+            existing.is_file()
+            and existing.suffix.lower() in IMAGE_SUFFIXES
+            and existing.name not in expected_files
+        ):
+            existing.unlink()
 
     images.sort(key=lambda item: (item.year if item.year else 9999, item.document_order))
     return media_dir, images
