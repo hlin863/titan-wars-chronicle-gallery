@@ -35,6 +35,8 @@ generated/
 output/
 cache/
 .cache/
+instance/gallery_cache/
+instance/gallery_media/
 
 # Application runtime files
 *.log
