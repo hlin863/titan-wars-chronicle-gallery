@@ -758,7 +758,9 @@ class GalleryServer:
                                     409,
                                 )
                                 return
-                            chapter = update_manuscript_chapter(
+                            from paragraph_editing import update_manuscript_chapter_with_inserts
+
+                            chapter = update_manuscript_chapter_with_inserts(
                                 server_state.source, chapter_id, paragraphs
                             )
                             server_state.refresh(force=True)
