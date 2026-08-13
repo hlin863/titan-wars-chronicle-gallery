@@ -6,13 +6,13 @@ import sys
 import time
 from pathlib import Path
 
-APP_PATH = Path(__file__).resolve().with_name("app.py")
+APP_PATH = Path(__file__).resolve().with_name("gallery_entry.py")
 
 
 def main() -> int:
     command = [sys.executable, "-X", "faulthandler", str(APP_PATH), *sys.argv[1:]]
     print(f"Gallery supervisor PID: {os.getpid()}")
-    print("Starting app.py with Python fault diagnostics enabled.")
+    print("Starting gallery_entry.py with Python fault diagnostics enabled.")
 
     while True:
         process = subprocess.Popen(command)

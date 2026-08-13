@@ -29,6 +29,18 @@ document.addEventListener('DOMContentLoaded', () => {
   let savedParagraphs = [];
   let saving = false;
 
+  const insertStyles = document.createElement('style');
+  insertStyles.textContent = `
+    .paragraph-gap{position:relative;max-width:820px;height:1.15rem;margin:-.55rem auto .05rem;display:flex;align-items:center;justify-content:center}
+    .paragraph-gap::before{content:"";position:absolute;left:.45rem;right:.45rem;top:50%;height:1px;background:rgba(161,122,61,0);transition:background .16s ease}
+    .paragraph-gap:hover::before,.paragraph-gap:focus-within::before{background:rgba(161,122,61,.35)}
+    .add-paragraph-button{position:relative;z-index:1;border:1px solid rgba(161,122,61,.48);border-radius:999px;padding:.18rem .62rem;background:#f3ead9;color:#6e5125;font-size:.68rem;font-weight:700;opacity:0;transform:translateY(2px) scale(.96);cursor:pointer;transition:opacity .14s ease,transform .14s ease}
+    .paragraph-gap:hover .add-paragraph-button,.paragraph-gap:focus-within .add-paragraph-button{opacity:1;transform:translateY(0) scale(1)}
+    .chapter-text p[data-new-paragraph="true"]{min-height:2.3rem;border-color:rgba(161,122,61,.5);background:rgba(255,255,255,.42)}
+    .chapter-text p[data-new-paragraph="true"]:empty::before{content:"Write the new paragraph…";color:#9a8a72;font-style:italic;pointer-events:none}
+  `;
+  document.head.appendChild(insertStyles);
+
   function escapeHtml(value) {
     return String(value)
       .replaceAll('&', '&amp;')
@@ -41,9 +53,7 @@ document.addEventListener('DOMContentLoaded', () => {
   async function getJson(url) {
     const response = await fetch(url, { cache: 'no-store' });
     const data = await response.json();
-    if (!response.ok || data.ok === false) {
-      throw new Error(data.error || `Request failed: ${response.status}`);
-    }
+    if (!response.ok || data.ok === false) throw new Error(data.error || `Request failed: ${response.status}`);
     return data;
   }
 
@@ -54,63 +64,27 @@ document.addEventListener('DOMContentLoaded', () => {
       body: JSON.stringify(payload),
     });
     const data = await response.json();
-    if (!response.ok || data.ok === false) {
-      throw new Error(data.error || `Request failed: ${response.status}`);
-    }
+    if (!response.ok || data.ok === false) throw new Error(data.error || `Request failed: ${response.status}`);
     return data;
   }
 
   function renderChapterList() {
     const query = chapterSearch.value.trim().toLowerCase();
     const visible = chapters.filter(chapter => {
-      const searchText = [
-        chapter.title,
-        chapter.part,
-        chapter.year,
-        ...(chapter.metadata_lines || []),
-      ].join(' ').toLowerCase();
+      const searchText = [chapter.title, chapter.part, chapter.year, ...(chapter.metadata_lines || [])].join(' ').toLowerCase();
       return !query || searchText.includes(query);
     });
-
     chapterList.innerHTML = '';
     visible.forEach(chapter => {
       const button = document.createElement('button');
       button.type = 'button';
       button.className = 'chapter-item';
       if (chapter.id === activeChapter?.id) button.classList.add('active');
-      button.innerHTML = `
-        <strong>${escapeHtml(chapter.title)}</strong>
-        <span>${escapeHtml(chapter.year || 'Undated')} · ${escapeHtml(chapter.part)}</span>
-      `;
+      button.innerHTML = `<strong>${escapeHtml(chapter.title)}</strong><span>${escapeHtml(chapter.year || 'Undated')} · ${escapeHtml(chapter.part)}</span>`;
       button.addEventListener('click', () => selectChapter(chapter));
       chapterList.appendChild(button);
     });
-
-    if (!visible.length) {
-      chapterList.innerHTML = '<p class="empty-state">No chapters match this search.</p>';
-    }
-  }
-
-  function selectChapter(chapter, discardChanges = false) {
-    if (activeChapter && hasUnsavedChanges()
-        && !discardChanges
-        && !window.confirm('Discard your unsaved chapter changes?')) return;
-    activeChapter = chapter;
-    highlightedText = '';
-    chapterPart.textContent = chapter.part;
-    chapterTitle.textContent = chapter.title;
-    chapterMeta.textContent = [
-      chapter.year || '',
-      ...(chapter.metadata_lines || []).slice(0, 3),
-    ].filter(Boolean).join(' · ');
-    savedParagraphs = [...(chapter.paragraphs || [])];
-    chapterText.innerHTML = savedParagraphs
-      .map(paragraph => `<p contenteditable="true" spellcheck="true">${escapeHtml(paragraph)}</p>`)
-      .join('');
-    selectionState.textContent = 'No passage selected';
-    captureSelection.disabled = true;
-    updateEditorState();
-    renderChapterList();
+    if (!visible.length) chapterList.innerHTML = '<p class="empty-state">No chapters match this search.</p>';
   }
 
   function editorParagraphs() {
@@ -119,8 +93,8 @@ document.addEventListener('DOMContentLoaded', () => {
 
   function hasUnsavedChanges() {
     const current = editorParagraphs();
-    return current.length === savedParagraphs.length
-      && current.some((paragraph, index) => paragraph !== savedParagraphs[index]);
+    return current.length !== savedParagraphs.length
+      || current.some((paragraph, index) => paragraph !== savedParagraphs[index]);
   }
 
   function updateEditorState(message = '') {
@@ -130,6 +104,54 @@ document.addEventListener('DOMContentLoaded', () => {
     discardChapter.disabled = saving || !changed;
   }
 
+  function renderParagraphGaps() {
+    chapterText.querySelectorAll(':scope > .paragraph-gap').forEach(gap => gap.remove());
+    const paragraphs = [...chapterText.querySelectorAll(':scope > p')];
+    for (let index = 1; index < paragraphs.length; index += 1) {
+      const gap = document.createElement('div');
+      gap.className = 'paragraph-gap';
+      gap.setAttribute('aria-label', 'Insert paragraph between manuscript paragraphs');
+      const button = document.createElement('button');
+      button.type = 'button';
+      button.className = 'add-paragraph-button';
+      button.textContent = '+ Add paragraph';
+      button.addEventListener('click', () => {
+        const paragraph = document.createElement('p');
+        paragraph.contentEditable = 'true';
+        paragraph.spellcheck = true;
+        paragraph.dataset.newParagraph = 'true';
+        paragraphs[index].before(paragraph);
+        renderParagraphGaps();
+        updateEditorState();
+        paragraph.focus();
+        const selection = window.getSelection();
+        const range = document.createRange();
+        range.selectNodeContents(paragraph);
+        range.collapse(true);
+        selection.removeAllRanges();
+        selection.addRange(range);
+      });
+      gap.appendChild(button);
+      paragraphs[index].before(gap);
+    }
+  }
+
+  function selectChapter(chapter, discardChanges = false) {
+    if (activeChapter && hasUnsavedChanges() && !discardChanges && !window.confirm('Discard your unsaved chapter changes?')) return;
+    activeChapter = chapter;
+    highlightedText = '';
+    chapterPart.textContent = chapter.part;
+    chapterTitle.textContent = chapter.title;
+    chapterMeta.textContent = [chapter.year || '', ...(chapter.metadata_lines || []).slice(0, 3)].filter(Boolean).join(' · ');
+    savedParagraphs = [...(chapter.paragraphs || [])];
+    chapterText.innerHTML = savedParagraphs.map(paragraph => `<p contenteditable="true" spellcheck="true">${escapeHtml(paragraph)}</p>`).join('');
+    renderParagraphGaps();
+    selectionState.textContent = 'No passage selected';
+    captureSelection.disabled = true;
+    updateEditorState();
+    renderChapterList();
+  }
+
   function updateSelection() {
     const selection = window.getSelection();
     if (!selection || selection.rangeCount === 0) return;
@@ -137,9 +159,7 @@ document.addEventListener('DOMContentLoaded', () => {
     const focusInside = chapterText.contains(selection.focusNode);
     highlightedText = anchorInside && focusInside ? selection.toString().trim() : '';
     captureSelection.disabled = highlightedText.length === 0;
-    selectionState.textContent = highlightedText
-      ? `${highlightedText.length.toLocaleString()} characters selected`
-      : 'No passage selected';
+    selectionState.textContent = highlightedText ? `${highlightedText.length.toLocaleString()} characters selected` : 'No passage selected';
   }
 
   async function loadChapters() {
@@ -178,35 +198,45 @@ document.addEventListener('DOMContentLoaded', () => {
 
   chapterText.addEventListener('mouseup', updateSelection);
   chapterText.addEventListener('keyup', updateSelection);
-  chapterText.addEventListener('input', () => updateEditorState());
+  chapterText.addEventListener('input', event => {
+    if (event.target.matches('p[data-new-paragraph="true"]') && event.target.textContent.trim()) {
+      event.target.removeAttribute('data-new-paragraph');
+    }
+    updateEditorState();
+  });
   chapterText.addEventListener('keydown', event => {
     if (event.key === 'Enter') event.preventDefault();
   });
+
   captureSelection.addEventListener('click', () => {
     selectedText.value = highlightedText;
     generationStatus.textContent = 'Highlighted passage copied into the prompt request.';
   });
   chapterSearch.addEventListener('input', renderChapterList);
-
-  discardChapter.addEventListener('click', () => {
-    selectChapter({...activeChapter, paragraphs: savedParagraphs}, true);
-  });
+  discardChapter.addEventListener('click', () => selectChapter({...activeChapter, paragraphs: savedParagraphs}, true));
 
   saveChapter.addEventListener('click', async () => {
     if (!activeChapter || !hasUnsavedChanges()) return;
+    const paragraphs = editorParagraphs();
+    if (paragraphs.some(paragraph => !paragraph.trim())) {
+      editorState.textContent = 'New paragraphs cannot be empty. Add text before saving.';
+      return;
+    }
     saving = true;
     updateEditorState('Saving to Manuscript…');
     try {
       const result = await postJson('/api/chapters/save', {
         chapter_id: activeChapter.id,
         version: manuscriptVersion,
-        paragraphs: editorParagraphs(),
+        paragraphs,
       });
       manuscriptVersion = result.version;
       activeChapter = result.chapter;
       savedParagraphs = [...result.chapter.paragraphs];
       const index = chapters.findIndex(chapter => chapter.id === activeChapter.id);
       if (index >= 0) chapters[index] = activeChapter;
+      chapterText.querySelectorAll(':scope > p').forEach(paragraph => paragraph.removeAttribute('data-new-paragraph'));
+      renderParagraphGaps();
       editorState.textContent = 'Saved to Manuscript';
       renderChapterList();
     } catch (error) {
@@ -225,15 +255,8 @@ document.addEventListener('DOMContentLoaded', () => {
 
   generatePrompt.addEventListener('click', async () => {
     const source = selectedText.value.trim();
-    if (!activeChapter) {
-      generationStatus.textContent = 'Select a chapter first.';
-      return;
-    }
-    if (source.length < 20) {
-      generationStatus.textContent = 'Select or paste at least 20 characters.';
-      return;
-    }
-
+    if (!activeChapter) { generationStatus.textContent = 'Select a chapter first.'; return; }
+    if (source.length < 20) { generationStatus.textContent = 'Select or paste at least 20 characters.'; return; }
     generatePrompt.disabled = true;
     generationStatus.textContent = `Generating with ${modelSelect.value}…`;
     generationMetrics.textContent = '';
@@ -250,14 +273,8 @@ document.addEventListener('DOMContentLoaded', () => {
       });
       generatedPrompt.value = result.prompt;
       generationStatus.textContent = `Prompt generated with ${result.model}.`;
-      const duration = result.duration_ns
-        ? `${(result.duration_ns / 1_000_000_000).toFixed(1)} seconds`
-        : '';
-      generationMetrics.textContent = [
-        result.prompt_tokens ? `${result.prompt_tokens} input tokens` : '',
-        result.output_tokens ? `${result.output_tokens} output tokens` : '',
-        duration,
-      ].filter(Boolean).join(' · ');
+      const duration = result.duration_ns ? `${(result.duration_ns / 1_000_000_000).toFixed(1)} seconds` : '';
+      generationMetrics.textContent = [result.prompt_tokens ? `${result.prompt_tokens} input tokens` : '', result.output_tokens ? `${result.output_tokens} output tokens` : '', duration].filter(Boolean).join(' · ');
     } catch (error) {
       generationStatus.textContent = error.message;
     } finally {
@@ -267,10 +284,7 @@ document.addEventListener('DOMContentLoaded', () => {
 
   copyPrompt.addEventListener('click', async () => {
     const prompt = generatedPrompt.value.trim();
-    if (!prompt) {
-      generationStatus.textContent = 'There is no prompt to copy.';
-      return;
-    }
+    if (!prompt) { generationStatus.textContent = 'There is no prompt to copy.'; return; }
     try {
       await navigator.clipboard.writeText(prompt);
       generationStatus.textContent = 'Prompt copied.';
