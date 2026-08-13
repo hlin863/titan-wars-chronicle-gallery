@@ -9,6 +9,9 @@ document.addEventListener('DOMContentLoaded', () => {
   const ollamaStatus = document.querySelector('#ollama-status');
   const selectionState = document.querySelector('#selection-state');
   const captureSelection = document.querySelector('#capture-selection');
+  const editorState = document.querySelector('#editor-state');
+  const saveChapter = document.querySelector('#save-chapter');
+  const discardChapter = document.querySelector('#discard-chapter');
   const selectedText = document.querySelector('#selected-text');
   const continuityNotes = document.querySelector('#continuity-notes');
   const styleDirection = document.querySelector('#style-direction');
@@ -22,6 +25,9 @@ document.addEventListener('DOMContentLoaded', () => {
   let chapters = [];
   let activeChapter = null;
   let highlightedText = '';
+  let manuscriptVersion = '';
+  let savedParagraphs = [];
+  let saving = false;
 
   function escapeHtml(value) {
     return String(value)
@@ -85,7 +91,10 @@ document.addEventListener('DOMContentLoaded', () => {
     }
   }
 
-  function selectChapter(chapter) {
+  function selectChapter(chapter, discardChanges = false) {
+    if (activeChapter && hasUnsavedChanges()
+        && !discardChanges
+        && !window.confirm('Discard your unsaved chapter changes?')) return;
     activeChapter = chapter;
     highlightedText = '';
     chapterPart.textContent = chapter.part;
@@ -94,12 +103,31 @@ document.addEventListener('DOMContentLoaded', () => {
       chapter.year || '',
       ...(chapter.metadata_lines || []).slice(0, 3),
     ].filter(Boolean).join(' · ');
-    chapterText.innerHTML = (chapter.paragraphs || [])
-      .map(paragraph => `<p>${escapeHtml(paragraph)}</p>`)
+    savedParagraphs = [...(chapter.paragraphs || [])];
+    chapterText.innerHTML = savedParagraphs
+      .map(paragraph => `<p contenteditable="true" spellcheck="true">${escapeHtml(paragraph)}</p>`)
       .join('');
     selectionState.textContent = 'No passage selected';
     captureSelection.disabled = true;
+    updateEditorState();
     renderChapterList();
+  }
+
+  function editorParagraphs() {
+    return [...chapterText.querySelectorAll(':scope > p')].map(paragraph => paragraph.textContent);
+  }
+
+  function hasUnsavedChanges() {
+    const current = editorParagraphs();
+    return current.length === savedParagraphs.length
+      && current.some((paragraph, index) => paragraph !== savedParagraphs[index]);
+  }
+
+  function updateEditorState(message = '') {
+    const changed = Boolean(activeChapter) && hasUnsavedChanges();
+    editorState.textContent = message || (changed ? 'Unsaved manuscript changes' : 'No unsaved changes');
+    saveChapter.disabled = saving || !changed;
+    discardChapter.disabled = saving || !changed;
   }
 
   function updateSelection() {
@@ -117,6 +145,7 @@ document.addEventListener('DOMContentLoaded', () => {
   async function loadChapters() {
     const data = await getJson('/api/chapters');
     chapters = data.chapters || [];
+    manuscriptVersion = data.version || '';
     renderChapterList();
     if (chapters.length) selectChapter(chapters[0]);
   }
@@ -149,11 +178,50 @@ document.addEventListener('DOMContentLoaded', () => {
 
   chapterText.addEventListener('mouseup', updateSelection);
   chapterText.addEventListener('keyup', updateSelection);
+  chapterText.addEventListener('input', () => updateEditorState());
+  chapterText.addEventListener('keydown', event => {
+    if (event.key === 'Enter') event.preventDefault();
+  });
   captureSelection.addEventListener('click', () => {
     selectedText.value = highlightedText;
     generationStatus.textContent = 'Highlighted passage copied into the prompt request.';
   });
   chapterSearch.addEventListener('input', renderChapterList);
+
+  discardChapter.addEventListener('click', () => {
+    selectChapter({...activeChapter, paragraphs: savedParagraphs}, true);
+  });
+
+  saveChapter.addEventListener('click', async () => {
+    if (!activeChapter || !hasUnsavedChanges()) return;
+    saving = true;
+    updateEditorState('Saving to Manuscript…');
+    try {
+      const result = await postJson('/api/chapters/save', {
+        chapter_id: activeChapter.id,
+        version: manuscriptVersion,
+        paragraphs: editorParagraphs(),
+      });
+      manuscriptVersion = result.version;
+      activeChapter = result.chapter;
+      savedParagraphs = [...result.chapter.paragraphs];
+      const index = chapters.findIndex(chapter => chapter.id === activeChapter.id);
+      if (index >= 0) chapters[index] = activeChapter;
+      editorState.textContent = 'Saved to Manuscript';
+      renderChapterList();
+    } catch (error) {
+      editorState.textContent = error.message;
+    } finally {
+      saving = false;
+      updateEditorState(editorState.textContent);
+    }
+  });
+
+  window.addEventListener('beforeunload', event => {
+    if (!hasUnsavedChanges()) return;
+    event.preventDefault();
+    event.returnValue = '';
+  });
 
   generatePrompt.addEventListener('click', async () => {
     const source = selectedText.value.trim();

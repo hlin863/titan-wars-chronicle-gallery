@@ -3,7 +3,8 @@ import json
 import os
 import threading
 from pathlib import Path
-from urllib.request import urlopen
+from urllib.error import HTTPError
+from urllib.request import Request, urlopen
 
 from docx import Document
 
@@ -14,6 +15,7 @@ from app import (
     extract_gallery,
     group_chapters,
     render_page,
+    update_manuscript_chapter,
 )
 
 
@@ -74,6 +76,31 @@ def test_manuscript_chapter_text_joins_paragraphs():
     )
 
     assert chapter.text == "First.\n\nSecond."
+
+
+def test_update_manuscript_chapter_only_replaces_selected_chapter(tmp_path):
+    manuscript = tmp_path / "Manuscript.docx"
+    document = Document()
+    document.add_heading("Part I", level=1)
+    document.add_heading("First", level=2)
+    document.add_paragraph("First chapter text.")
+    document.add_heading("Second", level=2)
+    document.add_paragraph("Second chapter text.")
+    document.save(manuscript)
+
+    updated = update_manuscript_chapter(
+        manuscript, "chapter-2-Second", ["Edited second chapter text."]
+    )
+
+    reopened = Document(manuscript)
+    assert updated.paragraphs == ["Edited second chapter text."]
+    assert [paragraph.text for paragraph in reopened.paragraphs] == [
+        "Part I",
+        "First",
+        "First chapter text.",
+        "Second",
+        "Edited second chapter text.",
+    ]
 
 
 def test_extract_gallery_syncs_files_without_rebuilding_directory(tmp_path):
@@ -181,6 +208,41 @@ def test_prompt_studio_and_chapter_api_are_served(tmp_path):
             assert response.status == 200
             assert payload["ok"] is True
             assert payload["chapters"][0]["title"] == "The Test Chapter"
+
+        save_request = Request(
+            f"{base_url}/api/chapters/save",
+            data=json.dumps(
+                {
+                    "chapter_id": payload["chapters"][0]["id"],
+                    "version": payload["version"],
+                    "paragraphs": ["London, 1857", "Edited chapter paragraph."],
+                }
+            ).encode("utf-8"),
+            headers={"Content-Type": "application/json"},
+            method="POST",
+        )
+        with urlopen(save_request) as response:
+            saved = json.loads(response.read().decode("utf-8"))
+            assert response.status == 200
+            assert saved["chapter"]["paragraphs"][-1] == "Edited chapter paragraph."
+
+        stale_request = Request(
+            f"{base_url}/api/chapters/save",
+            data=json.dumps(
+                {
+                    "chapter_id": payload["chapters"][0]["id"],
+                    "version": payload["version"],
+                    "paragraphs": ["London, 1858", "Stale edit."],
+                }
+            ).encode("utf-8"),
+            headers={"Content-Type": "application/json"},
+            method="POST",
+        )
+        try:
+            urlopen(stale_request)
+            raise AssertionError("A stale save should fail")
+        except HTTPError as error:
+            assert error.code == 409
     finally:
         server.shutdown()
         server.server_close()
