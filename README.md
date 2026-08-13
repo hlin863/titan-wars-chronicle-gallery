@@ -11,7 +11,8 @@ A small Python web application that reads the embedded illustrations from the 18
 - Synchronizes that folder incrementally when the manuscript changes: new images are added, unchanged images are left untouched, and removed manuscript images are deleted individually.
 - Uses content-derived image filenames, so moving an illustration within the manuscript does not force unrelated image files to be renamed or rewritten.
 - Includes a Prompt Studio backed by local Ollama models.
-- Does not modify the manuscript.
+- Lets Prompt Studio users edit chapter paragraphs and save them directly to the
+  selected Manuscript DOCX, with stale-edit protection when the file changes.
 
 ## Run on Windows
 

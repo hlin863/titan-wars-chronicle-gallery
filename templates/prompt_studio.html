@@ -23,8 +23,8 @@
                 <p class="eyebrow">Titan Wars visual development</p>
                 <h1>Prompt Studio</h1>
                 <p class="intro">
-                    Select a chapter, highlight the source passage, and use a local
-                    Ollama model to create a grounded image prompt.
+                    Edit a chapter directly in the manuscript, or highlight a source
+                    passage and use a local Ollama model to create a grounded image prompt.
                 </p>
             </div>
 
@@ -53,13 +53,18 @@
             </header>
 
             <div class="selection-bar">
-                <span id="selection-state">No passage selected</span>
-                <button id="capture-selection" type="button" disabled>
-                    Use highlighted text
-                </button>
+                <div>
+                    <strong id="editor-state">No unsaved changes</strong>
+                    <span id="selection-state">No passage selected</span>
+                </div>
+                <div class="editor-actions">
+                    <button id="discard-chapter" type="button" disabled>Discard</button>
+                    <button id="save-chapter" class="save-action" type="button" disabled>Save to Manuscript</button>
+                    <button id="capture-selection" type="button" disabled>Use highlighted text</button>
+                </div>
             </div>
 
-            <article id="chapter-text" class="chapter-text" tabindex="0">
+            <article id="chapter-text" class="chapter-text" tabindex="0" aria-label="Chapter text editor">
                 Choose a chapter from the left.
             </article>
         </section>

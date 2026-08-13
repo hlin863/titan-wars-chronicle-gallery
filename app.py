@@ -7,6 +7,7 @@ import json
 import mimetypes
 import os
 import re
+import tempfile
 import threading
 from dataclasses import asdict, dataclass
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
@@ -32,6 +33,7 @@ OLLAMA_BASE_URL = os.environ.get("OLLAMA_BASE_URL", "http://127.0.0.1:11434").rs
 OLLAMA_DEFAULT_MODEL = os.environ.get("OLLAMA_MODEL", "gemma3:4b")
 MAX_SELECTION_LENGTH = 16_000
 MAX_DIRECTION_LENGTH = 3_000
+MAX_CHAPTER_LENGTH = 500_000
 
 
 @dataclass
@@ -284,6 +286,83 @@ def extract_chapters(docx_path: Path) -> list[ManuscriptChapter]:
 
     finish_chapter()
     return chapters
+
+
+def update_manuscript_chapter(
+    docx_path: Path, chapter_id: str, paragraphs: list[str]
+) -> ManuscriptChapter:
+    """Replace one chapter's text paragraphs without disturbing other DOCX content.
+
+    Chapter ids contain the chapter's document order, which lets duplicate chapter
+    titles be edited safely. Empty/image-only paragraphs and headings are retained.
+    """
+    match = re.fullmatch(r"chapter-(\d+)-.+", chapter_id)
+    if not match:
+        raise ValueError("The chapter identifier is invalid.")
+    chapter_order = int(match.group(1))
+    if not paragraphs:
+        raise ValueError("A chapter must contain at least one paragraph.")
+    if any(not isinstance(item, str) for item in paragraphs):
+        raise ValueError("Chapter paragraphs must be text.")
+    normalized = [item.replace("\r\n", "\n").replace("\r", "\n") for item in paragraphs]
+    if any("\n" in item for item in normalized):
+        raise ValueError("Each chapter paragraph must be submitted separately.")
+    if sum(len(item) for item in normalized) > MAX_CHAPTER_LENGTH:
+        raise ValueError(f"Chapter exceeds the {MAX_CHAPTER_LENGTH:,}-character limit.")
+
+    document = Document(docx_path)
+    blocks = list(iter_blocks(document))
+    heading_count = 0
+    start_index: int | None = None
+    end_index = len(blocks)
+    for index, block in enumerate(blocks):
+        if not isinstance(block, Paragraph):
+            continue
+        style = (block.style.name or "").lower()
+        text = compact_text(block.text)
+        if style.startswith("heading 2") and text:
+            heading_count += 1
+            if heading_count == chapter_order:
+                start_index = index + 1
+            elif start_index is not None:
+                end_index = index
+                break
+        elif start_index is not None and style.startswith("heading 1") and text:
+            end_index = index
+            break
+    if start_index is None:
+        raise ValueError("The selected chapter no longer exists in the manuscript.")
+
+    editable = [
+        block
+        for block in blocks[start_index:end_index]
+        if isinstance(block, Paragraph) and compact_text(block.text)
+    ]
+    if not editable:
+        raise ValueError("The selected chapter has no editable text paragraphs.")
+    if len(normalized) != len(editable):
+        raise ValueError("The chapter structure changed; reload it before saving.")
+
+    for paragraph, replacement in zip(editable, normalized):
+        if paragraph.text != replacement:
+            paragraph.text = replacement
+
+    docx_path.parent.mkdir(parents=True, exist_ok=True)
+    fd, temporary_name = tempfile.mkstemp(
+        prefix=f".{docx_path.stem}-", suffix=".docx", dir=docx_path.parent
+    )
+    os.close(fd)
+    temporary_path = Path(temporary_name)
+    try:
+        document.save(temporary_path)
+        os.replace(temporary_path, docx_path)
+    finally:
+        temporary_path.unlink(missing_ok=True)
+
+    updated = extract_chapters(docx_path)
+    if chapter_order > len(updated):
+        raise RuntimeError("The saved chapter could not be reloaded.")
+    return updated[chapter_order - 1]
 
 
 def ollama_request(endpoint: str, payload: dict | None = None, timeout: int = 180) -> dict:
@@ -594,6 +673,33 @@ class GalleryServer:
             def do_POST(self):
                 path = unquote(urlparse(self.path).path)
                 try:
+                    if path == "/api/chapters/save":
+                        payload = self.read_json()
+                        chapter_id = str(payload.get("chapter_id") or "")
+                        expected_version = str(payload.get("version") or "")
+                        paragraphs = payload.get("paragraphs")
+                        if not isinstance(paragraphs, list):
+                            raise ValueError("Chapter paragraphs must be a list.")
+                        with server_state.lock:
+                            server_state.refresh_if_changed()
+                            if not expected_version or expected_version != server_state.version[:16]:
+                                self.send_json(
+                                    {
+                                        "ok": False,
+                                        "error": "The manuscript changed after this chapter was loaded. Reload before saving.",
+                                    },
+                                    409,
+                                )
+                                return
+                            chapter = update_manuscript_chapter(
+                                server_state.source, chapter_id, paragraphs
+                            )
+                            server_state.refresh(force=True)
+                            version = server_state.version[:16]
+                        self.send_json(
+                            {"ok": True, "version": version, "chapter": asdict(chapter)}
+                        )
+                        return
                     if path != "/api/ollama/write-prompt":
                         self.send_json({"ok": False, "error": "Unknown API route."}, 404)
                         return
