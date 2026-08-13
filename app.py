@@ -10,6 +10,7 @@ import re
 import tempfile
 import threading
 from dataclasses import asdict, dataclass
+from difflib import SequenceMatcher
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from pathlib import Path
 from typing import Iterable
@@ -288,6 +289,73 @@ def extract_chapters(docx_path: Path) -> list[ManuscriptChapter]:
     return chapters
 
 
+def replace_paragraph_text_preserving_runs(paragraph: Paragraph, replacement: str) -> None:
+    """Replace paragraph text while retaining the formatting of existing Word runs.
+
+    Unchanged text remains attached to its original run. Inserted or replaced text
+    inherits the formatting of the nearest existing run, so normal editor saves do
+    not reset font, size, emphasis, colour, or other run-level properties.
+    """
+    if paragraph.text == replacement:
+        return
+
+    runs = paragraph.runs
+    if not runs:
+        paragraph.add_run(replacement)
+        return
+
+    old_text = "".join(run.text for run in runs)
+    if not old_text:
+        runs[0].text = replacement
+        for run in runs[1:]:
+            run.text = ""
+        return
+
+    spans: list[tuple[int, int, int]] = []
+    cursor = 0
+    for index, run in enumerate(runs):
+        start = cursor
+        cursor += len(run.text)
+        spans.append((start, cursor, index))
+
+    def run_index_at(position: int) -> int:
+        if position >= len(old_text):
+            return len(runs) - 1
+        for start, end, index in spans:
+            if start <= position < end:
+                return index
+        for start, _end, index in reversed(spans):
+            if start <= position:
+                return index
+        return 0
+
+    allocations = [""] * len(runs)
+    matcher = SequenceMatcher(a=old_text, b=replacement, autojunk=False)
+    for tag, old_start, old_end, new_start, new_end in matcher.get_opcodes():
+        if tag == "equal":
+            old_cursor = old_start
+            new_cursor = new_start
+            while old_cursor < old_end:
+                run_index = run_index_at(old_cursor)
+                run_end = spans[run_index][1]
+                take = min(old_end, run_end) - old_cursor
+                if take <= 0:
+                    allocations[run_index] += replacement[new_cursor:new_end]
+                    break
+                allocations[run_index] += replacement[new_cursor:new_cursor + take]
+                old_cursor += take
+                new_cursor += take
+        elif tag in {"replace", "insert"}:
+            if tag == "insert" and old_start > 0:
+                run_index = run_index_at(old_start - 1)
+            else:
+                run_index = run_index_at(old_start)
+            allocations[run_index] += replacement[new_start:new_end]
+
+    for run, text in zip(runs, allocations):
+        run.text = text
+
+
 def update_manuscript_chapter(
     docx_path: Path, chapter_id: str, paragraphs: list[str]
 ) -> ManuscriptChapter:
@@ -344,8 +412,7 @@ def update_manuscript_chapter(
         raise ValueError("The chapter structure changed; reload it before saving.")
 
     for paragraph, replacement in zip(editable, normalized):
-        if paragraph.text != replacement:
-            paragraph.text = replacement
+        replace_paragraph_text_preserving_runs(paragraph, replacement)
 
     docx_path.parent.mkdir(parents=True, exist_ok=True)
     fd, temporary_name = tempfile.mkstemp(
