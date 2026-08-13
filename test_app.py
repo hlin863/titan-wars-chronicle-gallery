@@ -1,11 +1,25 @@
+import base64
 import json
+import os
 import threading
 from pathlib import Path
 from urllib.request import urlopen
 
 from docx import Document
 
-from app import GalleryImage, GalleryServer, ManuscriptChapter, group_chapters, render_page
+from app import (
+    GalleryImage,
+    GalleryServer,
+    ManuscriptChapter,
+    extract_gallery,
+    group_chapters,
+    render_page,
+)
+
+
+TEST_PNG = base64.b64decode(
+    "iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR42mP8/x8AAusB9Y9Z6J0AAAAASUVORK5CYII="
+)
 
 
 def test_gallery_renders_lightbox_and_primary_navigation():
@@ -60,6 +74,48 @@ def test_manuscript_chapter_text_joins_paragraphs():
     )
 
     assert chapter.text == "First.\n\nSecond."
+
+
+def test_extract_gallery_syncs_files_without_rebuilding_directory(tmp_path):
+    manuscript = tmp_path / "Manuscript.docx"
+    source_image = tmp_path / "source.png"
+    source_image.write_bytes(TEST_PNG)
+
+    document = Document()
+    document.add_heading("Part I", level=1)
+    document.add_heading("The Test Chapter", level=2)
+    document.add_paragraph("London, 1856")
+    document.add_picture(str(source_image))
+    document.save(manuscript)
+
+    media_dir = tmp_path / "gallery_media"
+    first_dir, first_images = extract_gallery(manuscript, media_dir)
+
+    assert first_dir == media_dir.resolve()
+    assert len(first_images) == 1
+    stored_image = media_dir / first_images[0].file_name
+    assert stored_image.exists()
+    assert stored_image.read_bytes() == TEST_PNG
+
+    fixed_time_ns = 1_600_000_000_000_000_000
+    os.utime(stored_image, ns=(fixed_time_ns, fixed_time_ns))
+    stale_image = media_dir / "stale-image.png"
+    stale_image.write_bytes(b"obsolete")
+    unrelated_file = media_dir / "notes.txt"
+    unrelated_file.write_text("keep me", encoding="utf-8")
+
+    document.add_paragraph("Updated manuscript text with the same illustration.")
+    document.save(manuscript)
+    second_dir, second_images = extract_gallery(manuscript, media_dir)
+
+    assert second_dir == media_dir.resolve()
+    assert len(second_images) == 1
+    assert second_images[0].file_name == first_images[0].file_name
+    assert stored_image.stat().st_mtime_ns == fixed_time_ns
+    assert stored_image.read_bytes() == TEST_PNG
+    assert not stale_image.exists()
+    assert unrelated_file.exists()
+    assert not (media_dir / "manifest.json").exists()
 
 
 def test_generate_prompt_builds_non_streaming_ollama_chat(monkeypatch):

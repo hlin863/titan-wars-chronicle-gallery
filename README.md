@@ -7,7 +7,10 @@ A small Python web application that reads the embedded illustrations from the 18
 - Extracts images directly from the DOCX file.
 - Sorts illustrated chapters by year, then by their original document order.
 - Year filters, chapter search, responsive layout, and full-screen image viewing.
-- Caches extracted media and metadata, so later launches are fast.
+- Keeps one persistent local image folder under `instance/gallery_media` instead of creating revision-specific cache folders.
+- Synchronizes that folder incrementally when the manuscript changes: new images are added, unchanged images are left untouched, and removed manuscript images are deleted individually.
+- Uses content-derived image filenames, so moving an illustration within the manuscript does not force unrelated image files to be renamed or rewritten.
+- Includes a Prompt Studio backed by local Ollama models.
 - Does not modify the manuscript.
 
 ## Run on Windows
@@ -20,7 +23,15 @@ pip install -r requirements.txt
 python app.py --docx "C:\path\to\Manuscript.docx"
 ```
 
-Open `http://127.0.0.1:5000` in a browser.
+If the local Python process has been stopping unexpectedly, use the supervised launcher instead:
+
+```powershell
+python run_gallery.py --docx "C:\path\to\Manuscript.docx"
+```
+
+The supervised launcher starts `app.py` with Python fault diagnostics enabled, prints the child process ID and exit code, and restarts the gallery automatically after an abnormal child-process exit. Press Ctrl+C to stop the supervisor normally.
+
+Open `http://127.0.0.1:5000` in a browser. Prompt Studio is available at `http://127.0.0.1:5000/prompt-studio`.
 
 ## Run on macOS or Linux
 
@@ -32,10 +43,14 @@ pip install -r requirements.txt
 python app.py --docx "/path/to/Manuscript.docx"
 ```
 
+The supervised launcher is also available with `python3 run_gallery.py`.
+
 ## Using the included project manuscript
 
-The default source in `app.py` is `/mnt/data/Manuscript(5).docx`, which is suitable for this generated workspace. On another computer, set the `TITAN_WARS_DOCX` environment variable as shown above.
+The default source in `app.py` is `files/Manuscript.docx`. You can point the application at another manuscript with `--docx` or the `TITAN_WARS_DOCX` environment variable.
 
 ## Refreshing after manuscript changes
 
-The cache key includes the manuscript file size and modification time. Saving a changed DOCX automatically creates a fresh extraction the next time the application starts. Cached files are stored under `instance/gallery_cache`.
+The server watches the manuscript file for changes. It uses the file signature and SHA-256 digest only to decide whether a refresh is needed and to version browser image URLs.
+
+When the manuscript changes, the application scans the embedded images and synchronizes `instance/gallery_media` file by file. The directory itself is not deleted during a refresh. Existing image files with matching content are kept in place, new images are written, and obsolete image files are removed individually. No hash-named revision cache directories or persistent manifest are created.

@@ -1,0 +1,101 @@
+<!doctype html>
+<html lang="en">
+
+<head>
+    <meta charset="utf-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1">
+    <title>Titan Wars — Prompt Studio</title>
+    <link rel="stylesheet" href="/static/prompt_studio.css">
+</head>
+
+<body>
+    <header class="studio-header">
+        <nav class="studio-nav" aria-label="Primary navigation">
+            <a class="brand" href="/">TITAN WARS</a>
+            <div class="studio-nav-links">
+                <a class="studio-nav-link" href="/">Illustrated chronology</a>
+                <a class="studio-nav-link active" href="/prompt-studio" aria-current="page">Prompt Studio</a>
+            </div>
+        </nav>
+
+        <div class="studio-hero">
+            <div>
+                <p class="eyebrow">Titan Wars visual development</p>
+                <h1>Prompt Studio</h1>
+                <p class="intro">
+                    Select a chapter, highlight the source passage, and use a local
+                    Ollama model to create a grounded image prompt.
+                </p>
+            </div>
+
+            <div class="connection-panel">
+                <span id="ollama-status" class="status-dot"></span>
+                <label for="model-select">Ollama model</label>
+                <select id="model-select">
+                    <option>Checking Ollama…</option>
+                </select>
+            </div>
+        </div>
+    </header>
+
+    <main class="studio-layout">
+        <aside class="chapter-panel">
+            <label for="chapter-search">Find chapter</label>
+            <input id="chapter-search" type="search" placeholder="Chapter, year, or section…">
+            <div id="chapter-list" class="chapter-list"></div>
+        </aside>
+
+        <section class="reader-panel">
+            <header class="chapter-header">
+                <p id="chapter-part"></p>
+                <h2 id="chapter-title">Select a chapter</h2>
+                <p id="chapter-meta"></p>
+            </header>
+
+            <div class="selection-bar">
+                <span id="selection-state">No passage selected</span>
+                <button id="capture-selection" type="button" disabled>
+                    Use highlighted text
+                </button>
+            </div>
+
+            <article id="chapter-text" class="chapter-text" tabindex="0">
+                Choose a chapter from the left.
+            </article>
+        </section>
+
+        <aside class="prompt-panel">
+            <label for="selected-text">Selected manuscript text</label>
+            <textarea id="selected-text" rows="10"
+                placeholder="Highlight text in the chapter and press “Use highlighted text”."></textarea>
+
+            <label for="continuity-notes">Continuity requirements</label>
+            <textarea id="continuity-notes" rows="6"
+                placeholder="Example: preserve Arabella’s 1856 fuller figure, blonde hair, blue-grey eyes, and ivory gown."></textarea>
+
+            <label for="style-direction">Visual direction</label>
+            <textarea id="style-direction" rows="5"
+                placeholder="Example: cinematic Victorian gothic portrait, warm candlelight against cold moonlight."></textarea>
+
+            <button id="generate-prompt" class="primary-action" type="button">
+                Generate prompt with Ollama
+            </button>
+
+            <div id="generation-status" class="generation-status" aria-live="polite"></div>
+
+            <label for="generated-prompt">Generated image prompt</label>
+            <textarea id="generated-prompt" rows="22" placeholder="The generated prompt will appear here."></textarea>
+
+            <div class="prompt-actions">
+                <button id="copy-prompt" type="button">Copy prompt</button>
+                <button id="clear-prompt" type="button">Clear</button>
+            </div>
+
+            <p id="generation-metrics" class="generation-metrics"></p>
+        </aside>
+    </main>
+
+    <script src="/static/prompt_studio.js"></script>
+</body>
+
+</html>
