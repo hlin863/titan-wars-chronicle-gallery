@@ -8,6 +8,10 @@ document.addEventListener('DOMContentLoaded', () => {
   const OLLAMA_BASE_URL = 'http://127.0.0.1:11434';
   const CHAT_MODEL = 'deepseek-r1:14b';
   const CHAT_NUM_CTX = 2048;
+  const CHAT_NUM_PREDICT = 384;
+  const CHAT_PROMPT_CHAR_BUDGET = 4200;
+  const CHAT_RETRY_CHAR_BUDGET = 2800;
+  const CHAT_HISTORY_MESSAGES = 4;
 
   const state = {
     messages: [],
@@ -90,6 +94,17 @@ document.addEventListener('DOMContentLoaded', () => {
     ].filter(Boolean).join(' · ');
   }
 
+  function truncateText(text, maxChars) {
+    const value = String(text || '').trim();
+    if (value.length <= maxChars) return value;
+    if (maxChars <= 80) return value.slice(0, Math.max(0, maxChars));
+    const marker = '\n…[context trimmed]…\n';
+    const available = maxChars - marker.length;
+    const startLength = Math.ceil(available * 0.65);
+    const endLength = available - startLength;
+    return `${value.slice(0, startLength)}${marker}${value.slice(-endLength)}`;
+  }
+
   function hideCommandMenu() {
     commandMenu.hidden = true;
   }
@@ -135,8 +150,8 @@ document.addEventListener('DOMContentLoaded', () => {
     state.selectedContext = currentSelection();
     chatSubtitle.textContent = `${CHAT_MODEL} · ${chapterDescriptor() || 'Current chapter'}`;
     chatContext.textContent = state.selectedContext
-      ? `Using highlighted passage (${state.selectedContext.length.toLocaleString()} characters) plus the current chapter.`
-      : 'Using the current chapter as context.';
+      ? `Using highlighted passage (${state.selectedContext.length.toLocaleString()} characters) plus a bounded chapter excerpt.`
+      : 'Using a bounded excerpt of the current chapter as context.';
     if (!state.messages.length && !chatMessages.children.length) resetConversation(true);
     chatShell.hidden = false;
     window.setTimeout(() => chatInput.focus(), 0);
@@ -147,22 +162,46 @@ document.addEventListener('DOMContentLoaded', () => {
     chatInput.value = '';
   }
 
-  function systemMessage() {
-    const chapter = currentChapterText();
+  function systemMessage(maxChars) {
     const selection = state.selectedContext;
-    return [
+    const chapter = currentChapterText();
+    const fixed = [
       'You are a local manuscript assistant for Titan Wars, a historical alternate-history and Victorian gothic novel.',
-      'Answer the user using the supplied chapter as the primary source. Be concise but useful.',
-      'Do not claim facts that are absent from the supplied text. Clearly mark inference as inference.',
+      'Answer using the supplied manuscript context as the primary source. Be concise but useful.',
+      'Do not claim facts absent from the supplied text. Clearly mark inference as inference.',
       'You are advisory only: do not imply that you edited or saved the manuscript.',
       '',
       `Part: ${chapterPart?.textContent?.trim() || 'Unknown'}`,
       `Chapter: ${chapterTitle?.textContent?.trim() || 'Unknown'}`,
       `Metadata: ${chapterMeta?.textContent?.trim() || 'None'}`,
-      selection ? `Highlighted passage:\n${selection}` : 'Highlighted passage: none',
-      '',
-      `Current chapter text:\n${chapter}`,
     ].join('\n');
+
+    const remaining = Math.max(600, maxChars - fixed.length - 80);
+    const selectionBudget = selection ? Math.min(1400, Math.floor(remaining * 0.48)) : 0;
+    const chapterBudget = Math.max(500, remaining - selectionBudget);
+    const sections = [fixed];
+
+    if (selection) {
+      sections.push(`Highlighted passage:\n${truncateText(selection, selectionBudget)}`);
+    } else {
+      sections.push('Highlighted passage: none');
+    }
+    sections.push(`Current chapter excerpt:\n${truncateText(chapter, chapterBudget)}`);
+    return truncateText(sections.join('\n\n'), maxChars);
+  }
+
+  function buildBoundedMessages(charBudget = CHAT_PROMPT_CHAR_BUDGET) {
+    const recent = state.messages.slice(-CHAT_HISTORY_MESSAGES).map(message => ({
+      role: message.role,
+      content: truncateText(message.content, message.role === 'user' ? 900 : 700),
+    }));
+
+    const historyChars = recent.reduce((total, message) => total + message.content.length, 0);
+    const systemBudget = Math.max(1600, charBudget - historyChars - 120);
+    return [
+      { role: 'system', content: systemMessage(systemBudget) },
+      ...recent,
+    ];
   }
 
   async function unloadOtherOllamaModels() {
@@ -196,6 +235,7 @@ document.addEventListener('DOMContentLoaded', () => {
         keep_alive: '10m',
         options: {
           num_ctx: CHAT_NUM_CTX,
+          num_predict: CHAT_NUM_PREDICT,
           ...(forceCpu ? { num_gpu: 0 } : {}),
         },
       }),
@@ -216,6 +256,13 @@ document.addEventListener('DOMContentLoaded', () => {
     );
   }
 
+  function isContextTooLarge(message) {
+    const normalized = String(message || '').toLowerCase();
+    return normalized.includes('exceeds the available context size') ||
+      normalized.includes('exceed_context_size_error') ||
+      normalized.includes('n_ctx');
+  }
+
   async function sendMessage(text) {
     if (state.busy || !text.trim()) return;
     const model = CHAT_MODEL;
@@ -228,25 +275,33 @@ document.addEventListener('DOMContentLoaded', () => {
     chatSend.disabled = true;
     const pending = appendMessage('status', `Preparing ${model}…`);
 
-    const messages = [
-      { role: 'system', content: systemMessage() },
-      ...state.messages,
-    ];
-
     try {
       pending.textContent = 'Freeing Ollama memory…';
       await unloadOtherOllamaModels();
 
+      let messages = buildBoundedMessages();
       pending.textContent = `Thinking with ${model}…`;
       let response = await requestDeepSeek(messages, false);
 
       if (!response.ok) {
-        const detail = await responseError(response);
-        if (!isCudaOutOfMemory(detail)) throw new Error(detail);
+        let detail = await responseError(response);
 
-        pending.textContent = `${model} does not fit in available VRAM. Retrying on CPU…`;
-        response = await requestDeepSeek(messages, true);
-        if (!response.ok) throw new Error(await responseError(response));
+        if (isContextTooLarge(detail)) {
+          pending.textContent = 'Chapter context is large. Retrying with a tighter excerpt…';
+          messages = buildBoundedMessages(CHAT_RETRY_CHAR_BUDGET);
+          response = await requestDeepSeek(messages, false);
+          if (!response.ok) detail = await responseError(response);
+          else detail = '';
+        }
+
+        if (!response.ok && isCudaOutOfMemory(detail)) {
+          pending.textContent = `${model} does not fit in available VRAM. Retrying on CPU…`;
+          response = await requestDeepSeek(messages, true);
+          if (!response.ok) detail = await responseError(response);
+          else detail = '';
+        }
+
+        if (!response.ok) throw new Error(detail);
       }
 
       const data = await response.json();
