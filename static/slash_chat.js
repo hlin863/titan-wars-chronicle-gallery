@@ -5,7 +5,9 @@ document.addEventListener('DOMContentLoaded', () => {
   const chapterMeta = document.querySelector('#chapter-meta');
   if (!chapterText) return;
 
+  const OLLAMA_BASE_URL = 'http://127.0.0.1:11434';
   const CHAT_MODEL = 'deepseek-r1:14b';
+  const CHAT_NUM_CTX = 2048;
 
   const state = {
     messages: [],
@@ -163,6 +165,57 @@ document.addEventListener('DOMContentLoaded', () => {
     ].join('\n');
   }
 
+  async function unloadOtherOllamaModels() {
+    try {
+      const response = await fetch(`${OLLAMA_BASE_URL}/api/ps`);
+      if (!response.ok) return;
+      const data = await response.json();
+      const models = Array.isArray(data?.models) ? data.models : [];
+      for (const loaded of models) {
+        const name = loaded?.name || loaded?.model;
+        if (!name || name === CHAT_MODEL) continue;
+        await fetch(`${OLLAMA_BASE_URL}/api/generate`, {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({ model: name, prompt: '', stream: false, keep_alive: 0 }),
+        });
+      }
+    } catch (error) {
+      console.warn('Could not unload other Ollama models before chat:', error);
+    }
+  }
+
+  async function requestDeepSeek(messages, forceCpu = false) {
+    return fetch(`${OLLAMA_BASE_URL}/api/chat`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({
+        model: CHAT_MODEL,
+        stream: false,
+        messages,
+        keep_alive: '10m',
+        options: {
+          num_ctx: CHAT_NUM_CTX,
+          ...(forceCpu ? { num_gpu: 0 } : {}),
+        },
+      }),
+    });
+  }
+
+  async function responseError(response) {
+    const detail = await response.text();
+    return detail || `Ollama returned ${response.status}`;
+  }
+
+  function isCudaOutOfMemory(message) {
+    const normalized = String(message || '').toLowerCase();
+    return normalized.includes('out of memory') && (
+      normalized.includes('cuda') ||
+      normalized.includes('llama-server') ||
+      normalized.includes('vram')
+    );
+  }
+
   async function sendMessage(text) {
     if (state.busy || !text.trim()) return;
     const model = CHAT_MODEL;
@@ -173,26 +226,29 @@ document.addEventListener('DOMContentLoaded', () => {
     chatInput.value = '';
     state.busy = true;
     chatSend.disabled = true;
-    const pending = appendMessage('status', `Thinking with ${model}…`);
+    const pending = appendMessage('status', `Preparing ${model}…`);
+
+    const messages = [
+      { role: 'system', content: systemMessage() },
+      ...state.messages,
+    ];
 
     try {
-      const response = await fetch('http://127.0.0.1:11434/api/chat', {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({
-          model,
-          stream: false,
-          messages: [
-            { role: 'system', content: systemMessage() },
-            ...state.messages,
-          ],
-          keep_alive: '10m',
-        }),
-      });
+      pending.textContent = 'Freeing Ollama memory…';
+      await unloadOtherOllamaModels();
+
+      pending.textContent = `Thinking with ${model}…`;
+      let response = await requestDeepSeek(messages, false);
+
       if (!response.ok) {
-        const detail = await response.text();
-        throw new Error(detail || `Ollama returned ${response.status}`);
+        const detail = await responseError(response);
+        if (!isCudaOutOfMemory(detail)) throw new Error(detail);
+
+        pending.textContent = `${model} does not fit in available VRAM. Retrying on CPU…`;
+        response = await requestDeepSeek(messages, true);
+        if (!response.ok) throw new Error(await responseError(response));
       }
+
       const data = await response.json();
       const answer = data?.message?.content?.trim();
       if (!answer) throw new Error('Ollama returned an empty response.');
