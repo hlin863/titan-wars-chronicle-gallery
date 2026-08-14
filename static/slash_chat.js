@@ -3,8 +3,9 @@ document.addEventListener('DOMContentLoaded', () => {
   const chapterTitle = document.querySelector('#chapter-title');
   const chapterPart = document.querySelector('#chapter-part');
   const chapterMeta = document.querySelector('#chapter-meta');
-  const modelSelect = document.querySelector('#model-select');
-  if (!chapterText || !modelSelect) return;
+  if (!chapterText) return;
+
+  const CHAT_MODEL = 'deepseek-r1:14b';
 
   const state = {
     messages: [],
@@ -18,11 +19,11 @@ document.addEventListener('DOMContentLoaded', () => {
   commandMenu.setAttribute('role', 'menu');
   commandMenu.innerHTML = `
     <p class="slash-command-kicker">Commands</p>
-    <button class="slash-command-item" type="button" role="menuitem" data-command="ask-llama">
+    <button class="slash-command-item" type="button" role="menuitem" data-command="ask-deepseek">
       <span class="slash-command-icon">✦</span>
       <span class="slash-command-copy">
-        <strong>Ask Llama</strong>
-        <span>Chat with the selected local model about this chapter</span>
+        <strong>Ask DeepSeek</strong>
+        <span>Chat with DeepSeek R1 14B about this chapter</span>
       </span>
       <span class="slash-command-key">Enter</span>
     </button>
@@ -36,19 +37,19 @@ document.addEventListener('DOMContentLoaded', () => {
     <section class="llama-chat" role="dialog" aria-modal="true" aria-labelledby="llama-chat-title">
       <header class="llama-chat-header">
         <div class="llama-chat-heading">
-          <strong id="llama-chat-title">✦ Ask Llama</strong>
+          <strong id="llama-chat-title">✦ Ask DeepSeek</strong>
           <span id="llama-chat-subtitle"></span>
         </div>
         <div class="llama-chat-header-actions">
           <button class="llama-chat-reset" type="button">New chat</button>
-          <button class="llama-chat-close" type="button" aria-label="Close Llama chat">×</button>
+          <button class="llama-chat-close" type="button" aria-label="Close DeepSeek chat">×</button>
         </div>
       </header>
       <div class="llama-chat-messages" aria-live="polite"></div>
       <form class="llama-chat-composer">
         <p class="llama-chat-context"></p>
         <div class="llama-chat-input-row">
-          <textarea class="llama-chat-input" rows="2" placeholder="Ask about this chapter…" aria-label="Message to local Llama model"></textarea>
+          <textarea class="llama-chat-input" rows="2" placeholder="Ask about this chapter…" aria-label="Message to local DeepSeek model"></textarea>
           <button class="llama-chat-send" type="submit">Ask</button>
         </div>
       </form>
@@ -64,7 +65,7 @@ document.addEventListener('DOMContentLoaded', () => {
   const closeChat = chatShell.querySelector('.llama-chat-close');
   const resetChat = chatShell.querySelector('.llama-chat-reset');
   const composer = chatShell.querySelector('.llama-chat-composer');
-  const askLlamaCommand = commandMenu.querySelector('[data-command="ask-llama"]');
+  const askDeepSeekCommand = commandMenu.querySelector('[data-command="ask-deepseek"]');
 
   function currentSelection() {
     const selection = window.getSelection();
@@ -104,7 +105,7 @@ document.addEventListener('DOMContentLoaded', () => {
     commandMenu.style.left = `${Math.max(12, Math.min(x, window.innerWidth - menuWidth - 12))}px`;
     commandMenu.style.top = `${Math.max(12, Math.min(y + 8, window.innerHeight - menuHeight - 12))}px`;
     commandMenu.hidden = false;
-    askLlamaCommand.focus();
+    askDeepSeekCommand.focus();
   }
 
   function appendMessage(role, text) {
@@ -130,7 +131,7 @@ document.addEventListener('DOMContentLoaded', () => {
   function openChat() {
     hideCommandMenu();
     state.selectedContext = currentSelection();
-    chatSubtitle.textContent = `${modelSelect.value || 'Local model'} · ${chapterDescriptor() || 'Current chapter'}`;
+    chatSubtitle.textContent = `${CHAT_MODEL} · ${chapterDescriptor() || 'Current chapter'}`;
     chatContext.textContent = state.selectedContext
       ? `Using highlighted passage (${state.selectedContext.length.toLocaleString()} characters) plus the current chapter.`
       : 'Using the current chapter as context.';
@@ -164,11 +165,7 @@ document.addEventListener('DOMContentLoaded', () => {
 
   async function sendMessage(text) {
     if (state.busy || !text.trim()) return;
-    const model = modelSelect.value;
-    if (!model || modelSelect.disabled) {
-      appendMessage('status', 'No local Ollama model is currently available.');
-      return;
-    }
+    const model = CHAT_MODEL;
 
     const userText = text.trim();
     state.messages.push({ role: 'user', content: userText });
@@ -203,7 +200,7 @@ document.addEventListener('DOMContentLoaded', () => {
       pending.remove();
       appendMessage('assistant', answer);
     } catch (error) {
-      pending.textContent = `Local Llama chat failed: ${error.message}`;
+      pending.textContent = `Local DeepSeek chat failed: ${error.message}`;
     } finally {
       state.busy = false;
       chatSend.disabled = false;
@@ -219,8 +216,8 @@ document.addEventListener('DOMContentLoaded', () => {
     showCommandMenu();
   }, true);
 
-  askLlamaCommand.addEventListener('click', openChat);
-  askLlamaCommand.addEventListener('keydown', event => {
+  askDeepSeekCommand.addEventListener('click', openChat);
+  askDeepSeekCommand.addEventListener('keydown', event => {
     if (event.key === 'Escape') {
       event.preventDefault();
       hideCommandMenu();
