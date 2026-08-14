@@ -68,8 +68,8 @@
 }
 .llama-chat-shell[hidden] { display: none; }
 .llama-chat {
-  width: min(720px, 96vw);
-  height: min(690px, 88vh);
+  width: min(780px, 96vw);
+  height: min(760px, 90vh);
   display: grid;
   grid-template-rows: auto minmax(0, 1fr) auto;
   overflow: hidden;
@@ -94,7 +94,7 @@
 .llama-chat-heading span { display: block; }
 .llama-chat-heading strong { font-family: Georgia, serif; font-size: 1.15rem; }
 .llama-chat-heading span {
-  max-width: 520px;
+  max-width: 560px;
   margin-top: .18rem;
   overflow: hidden;
   color: #bdaa89;
@@ -120,12 +120,12 @@
   scroll-behavior: smooth;
 }
 .llama-chat-message {
-  max-width: 88%;
+  max-width: 90%;
   margin-bottom: 1rem;
   padding: .85rem 1rem;
   border-radius: 14px;
   white-space: pre-wrap;
-  line-height: 1.55;
+  line-height: 1.58;
 }
 .llama-chat-message.user {
   margin-left: auto;
@@ -134,10 +134,44 @@
   color: #fff2de;
 }
 .llama-chat-message.assistant {
+  max-width: 94%;
   margin-right: auto;
   border: 1px solid rgba(206, 179, 125, .2);
   background: rgba(255,255,255,.055);
   color: #eee1ca;
+  white-space: normal;
+}
+.llama-chat-message.assistant p {
+  margin: 0 0 .78rem;
+}
+.llama-chat-message.assistant p:last-child { margin-bottom: 0; }
+.llama-chat-message.assistant h3,
+.llama-chat-message.assistant h4,
+.llama-chat-message.assistant h5 {
+  margin: 1.05rem 0 .48rem;
+  color: #fff0d2;
+  font-family: Georgia, serif;
+  line-height: 1.25;
+}
+.llama-chat-message.assistant h3:first-child,
+.llama-chat-message.assistant h4:first-child,
+.llama-chat-message.assistant h5:first-child { margin-top: 0; }
+.llama-chat-message.assistant ul,
+.llama-chat-message.assistant ol {
+  margin: .35rem 0 .85rem;
+  padding-left: 1.4rem;
+}
+.llama-chat-message.assistant li { margin: .28rem 0; }
+.llama-chat-message.assistant strong { color: #fff3dd; }
+.llama-chat-message.assistant em { color: #d8c39f; }
+.llama-chat-message.assistant code {
+  padding: .08rem .28rem;
+  border: 1px solid rgba(206, 179, 125, .18);
+  border-radius: 5px;
+  background: rgba(0, 0, 0, .22);
+  color: #f4dcae;
+  font-family: Consolas, 'Courier New', monospace;
+  font-size: .9em;
 }
 .llama-chat-message.status {
   max-width: none;
@@ -189,5 +223,6 @@
 @media (max-width: 620px) {
   .llama-chat-shell { padding: 0; }
   .llama-chat { width: 100vw; height: 100vh; border: 0; border-radius: 0; }
-  .llama-chat-message { max-width: 94%; }
+  .llama-chat-message,
+  .llama-chat-message.assistant { max-width: 94%; }
 }
