@@ -15,11 +15,10 @@ def test_slash_chat_uses_deepseek_r1_14b_and_chapter_context():
     assert "event.key !== '/'" in script
     assert "Ask DeepSeek" in script
     assert "const CHAT_MODEL = 'deepseek-r1:14b'" in script
-    assert "const model = CHAT_MODEL" in script
     assert "modelSelect.value" not in script
     assert "http://127.0.0.1:11434" in script
     assert "/api/chat" in script
-    assert "Current chapter text" in script
+    assert "Current chapter excerpt" in script
     assert "Highlighted passage" in script
     assert "stream: false" in script
     assert "do not imply that you edited or saved the manuscript" in script
@@ -35,6 +34,19 @@ def test_slash_chat_handles_ollama_memory_pressure():
     assert "num_gpu: 0" in script
     assert "isCudaOutOfMemory" in script
     assert "Retrying on CPU" in script
+
+
+def test_slash_chat_bounds_prompt_to_fit_deepseek_context():
+    script = Path("static/slash_chat.js").read_text(encoding="utf-8")
+
+    assert "const CHAT_PROMPT_CHAR_BUDGET = 4200" in script
+    assert "const CHAT_RETRY_CHAR_BUDGET = 2800" in script
+    assert "const CHAT_HISTORY_MESSAGES = 4" in script
+    assert "function truncateText" in script
+    assert "function buildBoundedMessages" in script
+    assert "isContextTooLarge" in script
+    assert "Retrying with a tighter excerpt" in script
+    assert "num_predict: CHAT_NUM_PREDICT" in script
 
 
 def test_slash_chat_does_not_call_manuscript_save_api():
