@@ -9,12 +9,14 @@ def test_prompt_studio_loads_slash_chat_assets():
     assert 'Type <strong>/</strong>' in page
 
 
-def test_slash_chat_uses_selected_local_ollama_model_and_chapter_context():
+def test_slash_chat_uses_deepseek_r1_14b_and_chapter_context():
     script = Path("static/slash_chat.js").read_text(encoding="utf-8")
 
     assert "event.key !== '/'" in script
-    assert "Ask Llama" in script
-    assert "modelSelect.value" in script
+    assert "Ask DeepSeek" in script
+    assert "const CHAT_MODEL = 'deepseek-r1:14b'" in script
+    assert "const model = CHAT_MODEL" in script
+    assert "modelSelect.value" not in script
     assert "http://127.0.0.1:11434/api/chat" in script
     assert "Current chapter text" in script
     assert "Highlighted passage" in script
