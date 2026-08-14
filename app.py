@@ -30,7 +30,9 @@ MEDIA_ROOT = BASE_DIR / "instance" / "gallery_media"
 YEAR_RE = re.compile(r"(?<!\d)(17\d{2}|18\d{2}|19\d{2}|20\d{2})(?!\d)")
 IMAGE_SUFFIXES = {".png", ".jpg", ".jpeg", ".gif", ".webp", ".bmp", ".tif", ".tiff"}
 
-OLLAMA_BASE_URL = os.environ.get("OLLAMA_BASE_URL", "http://127.0.0.1:11434").rstrip("/")
+OLLAMA_BASE_URL = os.environ.get("OLLAMA_BASE_URL", "http://127.0.0.1:11434").rstrip(
+    "/"
+)
 OLLAMA_DEFAULT_MODEL = os.environ.get("OLLAMA_MODEL", "gemma3:4b")
 MAX_SELECTION_LENGTH = 16_000
 MAX_DIRECTION_LENGTH = 3_000
@@ -140,7 +142,9 @@ def file_stat_signature(path: Path) -> tuple[int, int]:
     return stat.st_size, stat.st_mtime_ns
 
 
-def extract_gallery(docx_path: Path, media_dir: Path | None = None) -> tuple[Path, list[GalleryImage]]:
+def extract_gallery(
+    docx_path: Path, media_dir: Path | None = None
+) -> tuple[Path, list[GalleryImage]]:
     """Synchronize manuscript images into one persistent local media directory.
 
     Images use a content-derived filename, so moving an illustration within the
@@ -201,8 +205,12 @@ def extract_gallery(docx_path: Path, media_dir: Path | None = None) -> tuple[Pat
             if not target.exists() or file_digest(target) != content_digest:
                 target.write_bytes(blob)
 
-            context_candidates = [line for line in reversed(recent_lines) if line != current_chapter]
-            context = next((line for line in context_candidates if len(line) <= 130), "")
+            context_candidates = [
+                line for line in reversed(recent_lines) if line != current_chapter
+            ]
+            context = next(
+                (line for line in context_candidates if len(line) <= 130), ""
+            )
             images.append(
                 GalleryImage(
                     id=f"image-{order}",
@@ -224,7 +232,9 @@ def extract_gallery(docx_path: Path, media_dir: Path | None = None) -> tuple[Pat
         ):
             existing.unlink()
 
-    images.sort(key=lambda item: (item.year if item.year else 9999, item.document_order))
+    images.sort(
+        key=lambda item: (item.year if item.year else 9999, item.document_order)
+    )
     return media_dir, images
 
 
@@ -289,7 +299,9 @@ def extract_chapters(docx_path: Path) -> list[ManuscriptChapter]:
     return chapters
 
 
-def replace_paragraph_text_preserving_runs(paragraph: Paragraph, replacement: str) -> None:
+def replace_paragraph_text_preserving_runs(
+    paragraph: Paragraph, replacement: str
+) -> None:
     """Replace paragraph text while retaining the formatting of existing Word runs.
 
     Unchanged text remains attached to its original run. Inserted or replaced text
@@ -342,7 +354,7 @@ def replace_paragraph_text_preserving_runs(paragraph: Paragraph, replacement: st
                 if take <= 0:
                     allocations[run_index] += replacement[new_cursor:new_end]
                     break
-                allocations[run_index] += replacement[new_cursor:new_cursor + take]
+                allocations[run_index] += replacement[new_cursor : new_cursor + take]
                 old_cursor += take
                 new_cursor += take
         elif tag in {"replace", "insert"}:
@@ -432,14 +444,18 @@ def update_manuscript_chapter(
     return updated[chapter_order - 1]
 
 
-def ollama_request(endpoint: str, payload: dict | None = None, timeout: int = 180) -> dict:
+def ollama_request(
+    endpoint: str, payload: dict | None = None, timeout: int = 180
+) -> dict:
     url = f"{OLLAMA_BASE_URL}{endpoint}"
     body = None
     method = "GET"
     if payload is not None:
         body = json.dumps(payload).encode("utf-8")
         method = "POST"
-    request = Request(url, data=body, method=method, headers={"Content-Type": "application/json"})
+    request = Request(
+        url, data=body, method=method, headers={"Content-Type": "application/json"}
+    )
     try:
         with urlopen(request, timeout=timeout) as response:
             return json.loads(response.read().decode("utf-8"))
@@ -487,7 +503,9 @@ def generate_prompt_with_ollama(
     if len(selected_text) < 20:
         raise ValueError("Select at least 20 characters from the chapter.")
     if len(selected_text) > MAX_SELECTION_LENGTH:
-        raise ValueError(f"Selection exceeds the {MAX_SELECTION_LENGTH:,}-character limit.")
+        raise ValueError(
+            f"Selection exceeds the {MAX_SELECTION_LENGTH:,}-character limit."
+        )
 
     context = {
         "chapter": chapter_title,
@@ -560,12 +578,16 @@ def render_page(source: Path, images: list[GalleryImage], version: str = "") -> 
         for image in group["images"]:
             url = f"/media/{e(image.file_name)}?v={e(version)}"
             frames.append(
-                f'''<button class="image-frame" type="button" data-full="{url}" data-alt="{e(image.alt_text)}" data-title="{e(group['chapter'])}" aria-label="Open illustration from {e(group['chapter'])}"><img src="{url}" alt="{e(image.alt_text)}" loading="lazy"><span class="zoom-label">View image</span></button>'''
+                f"""<button class="image-frame" type="button" data-full="{url}" data-alt="{e(image.alt_text)}" data-title="{e(group['chapter'])}" aria-label="Open illustration from {e(group['chapter'])}"><img src="{url}" alt="{e(image.alt_text)}" loading="lazy"><span class="zoom-label">View image</span></button>"""
             )
         search_text = f"{group['chapter']} {group['part']} {group['context']} {group['year']}".lower()
-        context = f'<div class="context">{e(group["context"])}</div>' if group["context"] else ""
+        context = (
+            f'<div class="context">{e(group["context"])}</div>'
+            if group["context"]
+            else ""
+        )
         chapters.append(
-            f'''<article class="chapter" data-year="{group['year']}" data-search="{e(search_text)}"><div class="timeline-marker"><span>{group['year'] or '—'}</span></div><div class="chapter-card"><div class="chapter-heading"><p>{e(group['part'])}</p><h2>{e(group['chapter'])}</h2>{context}</div><div class="image-grid count-{len(frames)}">{''.join(frames)}</div></div></article>'''
+            f"""<article class="chapter" data-year="{group['year']}" data-search="{e(search_text)}"><div class="timeline-marker"><span>{group['year'] or '—'}</span></div><div class="chapter-card"><div class="chapter-heading"><p>{e(group['part'])}</p><h2>{e(group['chapter'])}</h2>{context}</div><div class="image-grid count-{len(frames)}">{''.join(frames)}</div></div></article>"""
         )
 
     template = (BASE_DIR / "templates" / "index.html").read_text(encoding="utf-8")
@@ -630,7 +652,9 @@ class GalleryServer:
         server_state = self
 
         class Handler(BaseHTTPRequestHandler):
-            def send_content(self, payload: bytes, content_type: str, cache_control: str = "no-cache"):
+            def send_content(
+                self, payload: bytes, content_type: str, cache_control: str = "no-cache"
+            ):
                 self.send_response(200)
                 self.send_header("Content-Type", content_type)
                 self.send_header("Cache-Control", cache_control)
@@ -665,7 +689,9 @@ class GalleryServer:
                     raise ValueError("The request body must be a JSON object.")
                 return payload
 
-            def send_file(self, root: Path, relative: str, cache_control: str = "no-cache"):
+            def send_file(
+                self, root: Path, relative: str, cache_control: str = "no-cache"
+            ):
                 target = (root / relative).resolve()
                 try:
                     target.relative_to(root.resolve())
@@ -675,22 +701,38 @@ class GalleryServer:
                 if not target.is_file():
                     self.send_error(404)
                     return
-                mime = mimetypes.guess_type(target.name)[0] or "application/octet-stream"
-                self.send_content(target.read_bytes(), mime, cache_control=cache_control)
+                mime = (
+                    mimetypes.guess_type(target.name)[0] or "application/octet-stream"
+                )
+                self.send_content(
+                    target.read_bytes(), mime, cache_control=cache_control
+                )
 
             def do_GET(self):
                 parsed = urlparse(self.path)
                 path = unquote(parsed.path)
                 query = parse_qs(parsed.query)
 
-                if path in {"/", "/prompt-studio", "/api/version", "/api/chapters", "/health"}:
+                if path in {
+                    "/",
+                    "/prompt-studio",
+                    "/api/version",
+                    "/api/chapters",
+                    "/health",
+                }:
                     server_state.refresh_if_changed()
 
                 if path == "/":
                     with server_state.lock:
-                        self.send_content(server_state.index_html, "text/html; charset=utf-8", "no-store")
+                        self.send_content(
+                            server_state.index_html,
+                            "text/html; charset=utf-8",
+                            "no-store",
+                        )
                 elif path == "/prompt-studio":
-                    self.send_file(BASE_DIR / "templates", "prompt_studio.html", "no-store")
+                    self.send_file(
+                        BASE_DIR / "templates", "prompt_studio.html", "no-store"
+                    )
                 elif path == "/api/version":
                     if query.get("force") == ["1"]:
                         server_state.refresh(force=True)
@@ -704,9 +746,13 @@ class GalleryServer:
                         )
                 elif path == "/api/chapters":
                     with server_state.lock:
-                        chapters = [asdict(chapter) for chapter in server_state.chapters]
+                        chapters = [
+                            asdict(chapter) for chapter in server_state.chapters
+                        ]
                         version = server_state.version[:16]
-                    self.send_json({"ok": True, "version": version, "chapters": chapters})
+                    self.send_json(
+                        {"ok": True, "version": version, "chapters": chapters}
+                    )
                 elif path == "/api/ollama/models":
                     try:
                         self.send_json(
@@ -717,7 +763,9 @@ class GalleryServer:
                             }
                         )
                     except RuntimeError as exc:
-                        self.send_json({"ok": False, "error": str(exc), "models": []}, 503)
+                        self.send_json(
+                            {"ok": False, "error": str(exc), "models": []}, 503
+                        )
                 elif path == "/health":
                     with server_state.lock:
                         self.send_json(
@@ -731,9 +779,15 @@ class GalleryServer:
                 elif path.startswith("/media/"):
                     with server_state.lock:
                         media_dir = server_state.media_dir
-                    self.send_file(media_dir, path[len("/media/"):], "public, max-age=31536000, immutable")
+                    self.send_file(
+                        media_dir,
+                        path[len("/media/") :],
+                        "public, max-age=31536000, immutable",
+                    )
                 elif path.startswith("/static/"):
-                    self.send_file(BASE_DIR / "static", path[len("/static/"):], "no-cache")
+                    self.send_file(
+                        BASE_DIR / "static", path[len("/static/") :], "no-cache"
+                    )
                 else:
                     self.send_error(404)
 
@@ -749,7 +803,10 @@ class GalleryServer:
                             raise ValueError("Chapter paragraphs must be a list.")
                         with server_state.lock:
                             server_state.refresh_if_changed()
-                            if not expected_version or expected_version != server_state.version[:16]:
+                            if (
+                                not expected_version
+                                or expected_version != server_state.version[:16]
+                            ):
                                 self.send_json(
                                     {
                                         "ok": False,
@@ -758,7 +815,9 @@ class GalleryServer:
                                     409,
                                 )
                                 return
-                            from paragraph_editing import update_manuscript_chapter_with_inserts
+                            from paragraph_editing import (
+                                update_manuscript_chapter_with_inserts,
+                            )
 
                             chapter = update_manuscript_chapter_with_inserts(
                                 server_state.source, chapter_id, paragraphs
@@ -770,7 +829,9 @@ class GalleryServer:
                         )
                         return
                     if path != "/api/ollama/write-prompt":
-                        self.send_json({"ok": False, "error": "Unknown API route."}, 404)
+                        self.send_json(
+                            {"ok": False, "error": "Unknown API route."}, 404
+                        )
                         return
                     payload = self.read_json()
                     try:
@@ -785,7 +846,11 @@ class GalleryServer:
                         chapter_title=str(payload.get("chapter_title") or ""),
                         part=str(payload.get("part") or ""),
                         year=year,
-                        metadata_lines=[str(item) for item in metadata_lines if isinstance(item, str)],
+                        metadata_lines=[
+                            str(item)
+                            for item in metadata_lines
+                            if isinstance(item, str)
+                        ],
                         selected_text=str(payload.get("selected_text") or ""),
                         continuity_notes=str(payload.get("continuity_notes") or ""),
                         style_direction=str(payload.get("style_direction") or ""),
@@ -798,7 +863,10 @@ class GalleryServer:
                 except Exception as exc:
                     print(f"Prompt Studio error: {exc}")
                     self.send_json(
-                        {"ok": False, "error": "Prompt generation failed. Check the server terminal."},
+                        {
+                            "ok": False,
+                            "error": "Prompt generation failed. Check the server terminal.",
+                        },
                         500,
                     )
 
@@ -812,7 +880,9 @@ def main():
     parser = argparse.ArgumentParser(
         description="Display manuscript illustrations and provide a local Ollama prompt studio."
     )
-    parser.add_argument("--docx", type=Path, default=DEFAULT_DOCX, help="Path to the manuscript DOCX")
+    parser.add_argument(
+        "--docx", type=Path, default=DEFAULT_DOCX, help="Path to the manuscript DOCX"
+    )
     parser.add_argument("--host", default="127.0.0.1")
     parser.add_argument("--port", type=int, default=int(os.environ.get("PORT", "5000")))
     args = parser.parse_args()
